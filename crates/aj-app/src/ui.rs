@@ -3,8 +3,12 @@
 //! The same `Action` enum feeds both the keyboard handler (`match_action`) and the
 //! egui menu bar (`draw_menu_bar`), so adding a new action is one enum variant plus
 //! one dispatch arm — the menu picks it up automatically via `strum::IntoEnumIterator`.
+//!
+//! `ViewAction` is the parallel enum for the View menu (page toggles in M1; zoom/pan
+//! in M2). Split from `Action` so `Action::iter()` stays scoped to the Edit menu and
+//! each enum can model its own enable-state without reaching into the other's world.
 
-use aj_core::HistoryStatus;
+use aj_core::{HistoryStatus, Page};
 use aj_engine::{Command, Engine};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -52,6 +56,21 @@ fn accel_held(mods: ModifiersState) -> bool {
     if cfg!(target_os = "macos") { mods.super_key() } else { mods.control_key() }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewAction {
+    TogglePageBounds,
+    ToggleClipToBounds,
+}
+
+impl ViewAction {
+    pub fn dispatch(self, engine: &Engine, page: Page) {
+        engine.send(match self {
+            ViewAction::TogglePageBounds => Command::SetShowBounds(!page.show_bounds),
+            ViewAction::ToggleClipToBounds => Command::SetClipToBounds(!page.clip_to_bounds),
+        });
+    }
+}
+
 /// Map a logical key + current modifier state to an `Action`, or `None` if the
 /// combination isn't bound. Keeps the binding table in one place rather than
 /// scattered across the event handler.
@@ -74,7 +93,13 @@ pub fn match_action(key: &Key, mods: ModifiersState) -> Option<Action> {
 /// Render the top menu bar and collect any actions the user triggered by clicking
 /// menu entries. Dispatch happens outside so we don't hold engine borrows across
 /// egui closures.
-pub fn draw_menu_bar(ctx: &egui::Context, history: HistoryStatus, pending: &mut Vec<Action>) {
+pub fn draw_menu_bar(
+    ctx: &egui::Context,
+    history: HistoryStatus,
+    page: Page,
+    pending_edit: &mut Vec<Action>,
+    pending_view: &mut Vec<ViewAction>,
+) {
     egui::TopBottomPanel::top("aj_menu_bar").show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
             ui.menu_button("File", |ui| {
@@ -86,13 +111,25 @@ pub fn draw_menu_bar(ctx: &egui::Context, history: HistoryStatus, pending: &mut 
                     let btn =
                         egui::Button::new(action.label()).shortcut_text(action.shortcut_text());
                     if ui.add_enabled(action.enabled(history), btn).clicked() {
-                        pending.push(action);
+                        pending_edit.push(action);
                         ui.close_menu();
                     }
                 }
             });
             ui.menu_button("View", |ui| {
-                ui.add_enabled(false, egui::Button::new("Reset view"));
+                // egui's checkbox wants a mutable bool, so we hand it a copy of the
+                // current state. The actual flip goes through the engine: `.changed()`
+                // enqueues a toggle action; the next snapshot reflects it.
+                let mut show = page.show_bounds;
+                if ui.checkbox(&mut show, "Show page bounds").changed() {
+                    pending_view.push(ViewAction::TogglePageBounds);
+                    ui.close_menu();
+                }
+                let mut clip = page.clip_to_bounds;
+                if ui.checkbox(&mut clip, "Clip strokes to page").changed() {
+                    pending_view.push(ViewAction::ToggleClipToBounds);
+                    ui.close_menu();
+                }
             });
         });
     });

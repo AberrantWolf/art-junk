@@ -3,7 +3,27 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub use kurbo::Point;
+// TODO(f32-migration): stored point coordinates are currently f64 via kurbo. We may
+// want to move to an f32 newtype once `aj-format` defines a persistence schema or
+// long-session memory pressure becomes real. GPU render precision is f32 regardless
+// (Vello downshifts at upload), so the choice only affects CPU-side storage + math.
+pub use kurbo::{Point, Size};
+
+/// Document page: the bounded "paper" strokes live in. Orthogonal `show_bounds` /
+/// `clip_to_bounds` flags span bounded-paper, infinite-canvas, and artboard-with-bleed
+/// workflows from one primitive.
+#[derive(Debug, Clone, Copy)]
+pub struct Page {
+    pub size: Size,
+    pub show_bounds: bool,
+    pub clip_to_bounds: bool,
+}
+
+impl Default for Page {
+    fn default() -> Self {
+        Self { size: Size::new(1920.0, 1080.0), show_bounds: true, clip_to_bounds: false }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StrokeId(pub u64);
@@ -22,15 +42,21 @@ pub struct Stroke {
     pub points: Vec<Point>,
 }
 
-/// Read-only view of the scene published to the renderer via `ArcSwap`.
+/// Read-only view of the scene published to the renderer via `ArcSwap`. Includes
+/// page state so the renderer reads everything it needs from one snapshot.
 #[derive(Debug, Clone, Default)]
 pub struct SceneSnapshot {
+    pub page: Page,
     pub strokes: Vec<Stroke>,
 }
 
 /// Authoritative mutable document state. Owned exclusively by the engine thread.
+// TODO(multi-page): today's `page` is implicitly the single active page. Multi-page
+// will restructure this (PageId, per-page strokes, active selection, undo scope);
+// today's single field is the deliberate simple shape until that feature lands.
 #[derive(Debug, Default)]
 pub struct DocumentState {
+    page: Page,
     strokes: Vec<Stroke>,
     active: Option<Stroke>,
 }
@@ -39,6 +65,23 @@ impl DocumentState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn page(&self) -> Page {
+        self.page
+    }
+
+    pub fn set_page_size(&mut self, size: Size) {
+        self.page.size = size;
+    }
+
+    pub fn set_show_bounds(&mut self, show: bool) {
+        self.page.show_bounds = show;
+    }
+
+    pub fn set_clip_to_bounds(&mut self, clip: bool) {
+        self.page.clip_to_bounds = clip;
     }
 
     pub fn begin_stroke(&mut self, stroke: Stroke) {
@@ -74,7 +117,7 @@ impl DocumentState {
         if let Some(active) = &self.active {
             strokes.push(active.clone());
         }
-        SceneSnapshot { strokes }
+        SceneSnapshot { page: self.page, strokes }
     }
 }
 
@@ -179,6 +222,26 @@ mod tests {
         let snap = doc.snapshot();
         assert_eq!(snap.strokes.len(), 1);
         assert_eq!(snap.strokes[0].id, StrokeId(7));
+    }
+
+    #[test]
+    fn default_page_is_1920x1080_bounded_unclipped() {
+        let page = Page::default();
+        assert_eq!(page.size, Size::new(1920.0, 1080.0));
+        assert!(page.show_bounds);
+        assert!(!page.clip_to_bounds);
+    }
+
+    #[test]
+    fn snapshot_carries_page_state() {
+        let mut doc = DocumentState::new();
+        doc.set_show_bounds(false);
+        doc.set_clip_to_bounds(true);
+        doc.set_page_size(Size::new(800.0, 600.0));
+        let snap = doc.snapshot();
+        assert_eq!(snap.page.size, Size::new(800.0, 600.0));
+        assert!(!snap.page.show_bounds);
+        assert!(snap.page.clip_to_bounds);
     }
 
     #[test]

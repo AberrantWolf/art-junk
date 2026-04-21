@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-use aj_core::{AppSnapshot, DocumentState, Edit, HistoryStatus, Point, Stroke, StrokeId};
+use aj_core::{AppSnapshot, DocumentState, Edit, HistoryStatus, Point, Size, Stroke, StrokeId};
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
@@ -12,6 +12,12 @@ pub enum Command {
     BeginStroke { id: StrokeId, point: Point },
     AddSample { id: StrokeId, point: Point },
     EndStroke { id: StrokeId },
+    // TODO(undoable-page-edits): page mutations are currently non-undoable. They are
+    // document-level attributes and arguably belong on the history stack; revisit
+    // once we have a second mutation category that needs the same treatment.
+    SetPageSize(Size),
+    SetShowBounds(bool),
+    SetClipToBounds(bool),
     Undo,
     Redo,
     Shutdown,
@@ -90,6 +96,15 @@ pub fn apply(cmd: Command, state: &mut EngineState) -> ApplyOutcome {
                     .expect("AddStroke into empty slot is infallible");
                 state.history.record(inverse);
             }
+        }
+        Command::SetPageSize(size) => {
+            state.doc.set_page_size(size);
+        }
+        Command::SetShowBounds(show) => {
+            state.doc.set_show_bounds(show);
+        }
+        Command::SetClipToBounds(clip) => {
+            state.doc.set_clip_to_bounds(clip);
         }
         Command::Undo => {
             if state.doc.has_active_stroke() {
@@ -171,5 +186,46 @@ fn run_actor(rx: &Receiver<Command>, snapshot: &Arc<ArcSwap<AppSnapshot>>) {
         if stop {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_show_bounds_updates_snapshot() {
+        let mut state = EngineState::new();
+        assert!(state.doc.page().show_bounds, "default is show_bounds=true");
+        apply(Command::SetShowBounds(false), &mut state);
+        assert!(!state.doc.page().show_bounds);
+        assert!(!state.snapshot().scene.page.show_bounds);
+    }
+
+    #[test]
+    fn set_clip_to_bounds_updates_snapshot() {
+        let mut state = EngineState::new();
+        assert!(!state.doc.page().clip_to_bounds);
+        apply(Command::SetClipToBounds(true), &mut state);
+        assert!(state.doc.page().clip_to_bounds);
+        assert!(state.snapshot().scene.page.clip_to_bounds);
+    }
+
+    #[test]
+    fn set_page_size_updates_snapshot() {
+        let mut state = EngineState::new();
+        apply(Command::SetPageSize(Size::new(800.0, 600.0)), &mut state);
+        assert_eq!(state.snapshot().scene.page.size, Size::new(800.0, 600.0));
+    }
+
+    #[test]
+    fn page_commands_do_not_touch_history() {
+        let mut state = EngineState::new();
+        apply(Command::SetShowBounds(false), &mut state);
+        apply(Command::SetClipToBounds(true), &mut state);
+        apply(Command::SetPageSize(Size::new(800.0, 600.0)), &mut state);
+        let status = state.history.status();
+        assert!(!status.can_undo);
+        assert!(!status.can_redo);
     }
 }

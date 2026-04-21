@@ -17,7 +17,7 @@ use winit::window::{Window, WindowId};
 
 use crate::compose::Chrome;
 use crate::gpu::GpuState;
-use crate::ui::{Action, draw_menu_bar, match_action};
+use crate::ui::{Action, ViewAction, draw_menu_bar, match_action};
 
 struct App {
     window: Option<Arc<Window>>,
@@ -78,12 +78,17 @@ impl App {
 
         // 1. Run egui for the frame and collect any menu-triggered actions.
         let raw_input = chrome.winit_state.take_egui_input(window);
-        let mut pending_actions: Vec<Action> = Vec::new();
+        let mut pending_edit: Vec<Action> = Vec::new();
+        let mut pending_view: Vec<ViewAction> = Vec::new();
+        let page = app_snapshot.scene.page;
         let full_output = chrome.ctx.run(raw_input, |ctx| {
-            draw_menu_bar(ctx, app_snapshot.history, &mut pending_actions);
+            draw_menu_bar(ctx, app_snapshot.history, page, &mut pending_edit, &mut pending_view);
         });
-        for action in pending_actions {
+        for action in pending_edit {
             action.dispatch(engine);
+        }
+        for view_action in pending_view {
+            view_action.dispatch(engine, page);
         }
 
         // 2. Vello paints the scene into the surface texture (own submit).

@@ -1,8 +1,8 @@
 //! Vello-based rendering pipeline for art-junk scenes.
 
 use aj_core::SceneSnapshot;
-use vello::kurbo::{Affine, BezPath, Stroke as KStroke};
-use vello::peniko::Color;
+use vello::kurbo::{Affine, BezPath, Rect, Stroke as KStroke};
+use vello::peniko::{Color, Mix};
 use vello::{AaConfig, AaSupport, RenderParams, Renderer as VelloRenderer, RendererOptions, Scene};
 
 pub struct Renderer {
@@ -36,6 +36,15 @@ impl Renderer {
         let mut scene = Scene::new();
         let stroke_style = KStroke::new(2.0);
         let cyan = Color::rgb8(0, 200, 220);
+        let page = snapshot.page;
+        let page_rect = Rect::from_origin_size((0.0, 0.0), page.size);
+
+        // Strokes optionally live inside a clip layer at the page rect. The border
+        // is drawn *outside* the clip so it stays visible even when the clip would
+        // otherwise cull strokes at the edge.
+        if page.clip_to_bounds {
+            scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &page_rect);
+        }
         for s in &snapshot.strokes {
             if s.points.len() < 2 {
                 continue;
@@ -47,6 +56,15 @@ impl Renderer {
             }
             scene.stroke(&stroke_style, Affine::IDENTITY, cyan, None, &path);
         }
+        if page.clip_to_bounds {
+            scene.pop_layer();
+        }
+        if page.show_bounds {
+            let border_style = KStroke::new(1.0);
+            let border_color = Color::rgb8(80, 90, 100);
+            scene.stroke(&border_style, Affine::IDENTITY, border_color, None, &page_rect);
+        }
+
         self.vello
             .render_to_surface(
                 device,

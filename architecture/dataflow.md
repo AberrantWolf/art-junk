@@ -15,8 +15,9 @@ sequenceDiagram
   UI->>Act: key event (if egui didn't consume)
   Act->>Eng: Command::Undo / Command::Redo
   UI->>Eng: Command::BeginStroke / AddSample / EndStroke
+  UI->>Eng: Command::SetPageSize / SetShowBounds / SetClipToBounds
   Eng->>His: record inverse on EndStroke; pop / push on Undo / Redo
-  Eng->>Snap: store(Arc::new(AppSnapshot { scene, history }))
+  Eng->>Snap: store(Arc::new(AppSnapshot { scene: SceneSnapshot { page, strokes }, history }))
   UI->>UI: window.request_redraw()
   UI->>Ren: render(&snapshot.scene, surface_texture)
   UI->>Chr: paint(surface_texture, full_output)   # egui overlay, LoadOp::Load
@@ -30,8 +31,13 @@ sequenceDiagram
   batch, so burst input does not cause snapshot thrash.
 - `AppSnapshot` bundles the renderer-facing `SceneSnapshot` (arc'd, so cheap to clone)
   with a `HistoryStatus { can_undo, can_redo }` so UI can enable/disable menu entries
-  without reaching into engine internals. Renderer ignores `history`; UI ignores
-  `scene`'s contents.
+  without reaching into engine internals. Renderer ignores `history`; UI reads
+  `scene.page` for toggle checkmarks but ignores `scene.strokes`.
+- `SceneSnapshot` is `{ page: Page, strokes: Vec<Stroke> }`. Page state rides the
+  same single ArcSwap publication as strokes so the renderer reads both from a
+  consistent view — no parallel channel for page mutations.
+- Page mutations (`SetPageSize` / `SetShowBounds` / `SetClipToBounds`) are Commands
+  but not `Edit`s: they bypass the history stack (non-undoable in v1, TODO noted).
 - `History` stores the *inverse* of each applied forward edit on `past`, so committing
   a future edit that destroys data (e.g. `RemoveStroke`) captures the payload at apply
   time. `Undo` pops from `past`, applies, and pushes the resulting forward edit onto
