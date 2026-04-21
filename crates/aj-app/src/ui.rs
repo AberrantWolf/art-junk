@@ -58,17 +58,47 @@ fn accel_held(mods: ModifiersState) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewAction {
+    ZoomIn,
+    ZoomOut,
+    ZoomTo100,
+    ZoomToFit,
+    ResetView,
     TogglePageBounds,
     ToggleClipToBounds,
 }
 
 impl ViewAction {
-    pub fn dispatch(self, engine: &Engine, page: Page) {
-        engine.send(match self {
-            ViewAction::TogglePageBounds => Command::SetShowBounds(!page.show_bounds),
-            ViewAction::ToggleClipToBounds => Command::SetClipToBounds(!page.clip_to_bounds),
-        });
+    /// Platform-standard keyboard shortcut string for display in menus.
+    pub fn shortcut_text(self) -> Option<String> {
+        let accel = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+        match self {
+            ViewAction::ZoomIn => Some(format!("{accel}=")),
+            ViewAction::ZoomOut => Some(format!("{accel}-")),
+            ViewAction::ZoomTo100 => Some(format!("{accel}0")),
+            _ => None,
+        }
     }
+}
+
+/// Map a logical key + modifier state to a `ViewAction`. Edit-menu shortcuts live
+/// in `match_action`; view shortcuts sit in a parallel function so the two enums
+/// stay independent. `Ctrl/Cmd + =` zooms in (same physical key as `+`, so this also
+/// catches the shifted form on most layouts).
+pub fn match_view_action(key: &Key, mods: ModifiersState) -> Option<ViewAction> {
+    let Key::Character(s) = key else { return None };
+    if !accel_held(mods) {
+        return None;
+    }
+    if s.as_str() == "=" || s.as_str() == "+" {
+        return Some(ViewAction::ZoomIn);
+    }
+    if s.as_str() == "-" || s.as_str() == "_" {
+        return Some(ViewAction::ZoomOut);
+    }
+    if s.as_str() == "0" {
+        return Some(ViewAction::ZoomTo100);
+    }
+    None
 }
 
 /// Map a logical key + current modifier state to an `Action`, or `None` if the
@@ -117,6 +147,24 @@ pub fn draw_menu_bar(
                 }
             });
             ui.menu_button("View", |ui| {
+                let zoom_entries = [
+                    (ViewAction::ZoomIn, "Zoom In"),
+                    (ViewAction::ZoomOut, "Zoom Out"),
+                    (ViewAction::ZoomTo100, "Zoom to 100%"),
+                    (ViewAction::ZoomToFit, "Zoom to Fit"),
+                    (ViewAction::ResetView, "Reset View"),
+                ];
+                for (action, label) in zoom_entries {
+                    let mut btn = egui::Button::new(label);
+                    if let Some(sc) = action.shortcut_text() {
+                        btn = btn.shortcut_text(sc);
+                    }
+                    if ui.add(btn).clicked() {
+                        pending_view.push(action);
+                        ui.close_menu();
+                    }
+                }
+                ui.separator();
                 // egui's checkbox wants a mutable bool, so we hand it a copy of the
                 // current state. The actual flip goes through the engine: `.changed()`
                 // enqueues a toggle action; the next snapshot reflects it.

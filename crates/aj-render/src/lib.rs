@@ -24,11 +24,13 @@ impl Renderer {
         Ok(Self { vello })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         snapshot: &SceneSnapshot,
+        world_to_screen: Affine,
         surface_texture: &wgpu::SurfaceTexture,
         width: u32,
         height: u32,
@@ -39,11 +41,11 @@ impl Renderer {
         let page = snapshot.page;
         let page_rect = Rect::from_origin_size((0.0, 0.0), page.size);
 
-        // Strokes optionally live inside a clip layer at the page rect. The border
-        // is drawn *outside* the clip so it stays visible even when the clip would
-        // otherwise cull strokes at the edge.
+        // Strokes optionally live inside a clip layer at the page rect (world-space).
+        // The border is drawn *outside* the clip so it stays visible even when the
+        // clip would otherwise cull strokes at the page edge.
         if page.clip_to_bounds {
-            scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &page_rect);
+            scene.push_layer(Mix::Clip, 1.0, world_to_screen, &page_rect);
         }
         for s in &snapshot.strokes {
             if s.points.len() < 2 {
@@ -54,15 +56,21 @@ impl Renderer {
             for p in &s.points[1..] {
                 path.line_to(*p);
             }
-            scene.stroke(&stroke_style, Affine::IDENTITY, cyan, None, &path);
+            // Passing world_to_screen here (rather than pre-transforming `path`)
+            // makes stroke widths scale with zoom, which is what vectors should do —
+            // this is what demonstrates the app's vector-drawing nature.
+            scene.stroke(&stroke_style, world_to_screen, cyan, None, &path);
         }
         if page.clip_to_bounds {
             scene.pop_layer();
         }
         if page.show_bounds {
+            // TODO(border-screen-weight): border currently scales with zoom (looks
+            // thinner far-out, thicker zoomed-in). M3 polish is to render it at
+            // constant screen pixels so it's always legible as page chrome.
             let border_style = KStroke::new(1.0);
             let border_color = Color::rgb8(80, 90, 100);
-            scene.stroke(&border_style, Affine::IDENTITY, border_color, None, &page_rect);
+            scene.stroke(&border_style, world_to_screen, border_color, None, &page_rect);
         }
 
         self.vello

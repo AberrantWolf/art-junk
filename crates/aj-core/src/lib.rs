@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // want to move to an f32 newtype once `aj-format` defines a persistence schema or
 // long-session memory pressure becomes real. GPU render precision is f32 regardless
 // (Vello downshifts at upload), so the choice only affects CPU-side storage + math.
-pub use kurbo::{Point, Size};
+pub use kurbo::{Affine, Point, Size, Vec2};
 
 /// Document page: the bounded "paper" strokes live in. Orthogonal `show_bounds` /
 /// `clip_to_bounds` flags span bounded-paper, infinite-canvas, and artboard-with-bleed

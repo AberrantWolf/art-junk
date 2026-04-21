@@ -20,6 +20,10 @@ pub struct Chrome {
 impl Chrome {
     pub fn new(gpu: &GpuState, window: &Window) -> Self {
         let ctx = egui::Context::default();
+        // egui's default behaviour is to consume Cmd/Ctrl + = / - / 0 for its own
+        // UI-scaling feature. We own those shortcuts for canvas zoom, so turn
+        // egui's built-in handler off.
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let viewport_id = ctx.viewport_id();
         #[allow(clippy::cast_possible_truncation)]
         let scale = window.scale_factor() as f32;
