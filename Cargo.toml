@@ -40,6 +40,12 @@ vello = "0.3"
 arc-swap = "1"
 crossbeam-channel = "0.5"
 
+egui = "0.29"
+egui-wgpu = "0.29"
+egui-winit = "0.29"
+strum = "0.26"
+strum_macros = "0.26"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 

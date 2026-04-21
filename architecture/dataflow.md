@@ -2,23 +2,47 @@
 
 ```mermaid
 sequenceDiagram
-  participant Win as winit event loop (aj-app)
+  participant UI as winit event loop (aj-app)
+  participant Chr as egui chrome (aj-app)
+  participant Act as ActionTable (aj-app)
   participant Eng as aj-engine actor thread
-  participant Snap as ArcSwap&lt;SceneSnapshot&gt;
+  participant His as History (undo/redo stacks)
+  participant Snap as ArcSwap&lt;AppSnapshot&gt;
   participant Ren as aj-render (Vello)
 
-  Win->>Eng: Command::BeginStroke{id, point}
-  Win->>Eng: Command::AddSample{id, point} per CursorMoved
-  Eng->>Snap: store(Arc::new(new snapshot))
-  Win->>Win: window.request_redraw()
-  Win->>Ren: render(snapshot.load_full(), surface_texture)
-  Ren->>Win: frame.present()
-  Win->>Eng: Command::EndStroke{id}
+  Note over UI,Chr: pointer / key events first routed through egui
+  UI->>Chr: on_window_event(event)
+  UI->>Act: key event (if egui didn't consume)
+  Act->>Eng: Command::Undo / Command::Redo
+  UI->>Eng: Command::BeginStroke / AddSample / EndStroke
+  Eng->>His: record inverse on EndStroke; pop / push on Undo / Redo
+  Eng->>Snap: store(Arc::new(AppSnapshot { scene, history }))
+  UI->>UI: window.request_redraw()
+  UI->>Ren: render(&snapshot.scene, surface_texture)
+  UI->>Chr: paint(surface_texture, full_output)   # egui overlay, LoadOp::Load
+  UI->>UI: frame.present()
 ```
 
 ## Notes
 
-- UI never mutates Document state directly — every change is a `Command` on a channel.
-- The engine drains commands (recv + try_recv) and publishes a single snapshot per batch, so burst input does not cause snapshot thrash.
-- The renderer reads `ArcSwap::load_full()` which is lock-free; the engine can be publishing a new snapshot concurrently with no coordination.
-- `EndStroke` does not itself change rendered output (in M2) — it just closes the input phase for that stroke ID.
+- UI never mutates `DocumentState` directly — every change is a `Command` on a channel.
+- The engine drains commands (recv + try_recv) and publishes a single `AppSnapshot` per
+  batch, so burst input does not cause snapshot thrash.
+- `AppSnapshot` bundles the renderer-facing `SceneSnapshot` (arc'd, so cheap to clone)
+  with a `HistoryStatus { can_undo, can_redo }` so UI can enable/disable menu entries
+  without reaching into engine internals. Renderer ignores `history`; UI ignores
+  `scene`'s contents.
+- `History` stores the *inverse* of each applied forward edit on `past`, so committing
+  a future edit that destroys data (e.g. `RemoveStroke`) captures the payload at apply
+  time. `Undo` pops from `past`, applies, and pushes the resulting forward edit onto
+  `future`; `Redo` is symmetric.
+- A fresh commit after undo truncates `future` (standard tree → linear history).
+- `Undo` / `Redo` are no-ops while a stroke is mid-drag (`DocumentState::has_active_stroke`).
+- `EndStroke` is the commit point: active stroke moves into the strokes vec and one
+  `Edit::AddStroke` lands on history.
+- The renderer reads `ArcSwap::load_full()` lock-free; the engine can publish
+  concurrently with no coordination.
+- egui chrome shares the surface texture with Vello via two-submit overlay:
+  Vello's `render_to_surface` submits first; egui-wgpu's pass uses `LoadOp::Load`
+  on the same surface view so chrome overlays the drawing.
+```

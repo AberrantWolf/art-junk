@@ -1,30 +1,34 @@
+mod compose;
+mod gpu;
+mod ui;
+
 use std::sync::Arc;
 
 use aj_core::{Point, StrokeId};
 use aj_engine::{Command, Engine};
 use aj_render::Renderer;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
-struct GpuState {
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-}
+use crate::compose::Chrome;
+use crate::gpu::GpuState;
+use crate::ui::{Action, draw_menu_bar, match_action};
 
 struct App {
     window: Option<Arc<Window>>,
     gpu: Option<GpuState>,
     renderer: Option<Renderer>,
+    chrome: Option<Chrome>,
     engine: Option<Engine>,
     cursor: Option<PhysicalPosition<f64>>,
     active_stroke: Option<StrokeId>,
     mouse_down: bool,
+    modifiers: ModifiersState,
 }
 
 impl App {
@@ -33,67 +37,33 @@ impl App {
             window: None,
             gpu: None,
             renderer: None,
+            chrome: None,
             engine: None,
             cursor: None,
             active_stroke: None,
             mouse_down: false,
+            modifiers: ModifiersState::empty(),
         }
     }
 
-    fn init_gpu(&mut self, window: &Arc<Window>) -> Result<()> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-        let surface = instance.create_surface(window.clone()).context("create_surface failed")?;
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .context("no suitable GPU adapter")?;
-
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("aj-app device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
-            },
-            None,
-        ))
-        .context("request_device failed")?;
-
-        let size = window.inner_size();
-        let caps = surface.get_capabilities(&adapter);
-        let format = [wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureFormat::Bgra8Unorm]
-            .into_iter()
-            .find(|f| caps.formats.contains(f))
-            .unwrap_or(caps.formats[0]);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: caps.present_modes[0],
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
-
-        self.gpu = Some(GpuState { surface, device, queue, config });
+    fn init(&mut self, window: Arc<Window>) -> Result<()> {
+        let gpu = GpuState::new(&window)?;
+        let renderer = Renderer::new(&gpu.device, gpu.config.format)?;
+        let chrome = Chrome::new(&gpu, &window);
+        self.gpu = Some(gpu);
+        self.renderer = Some(renderer);
+        self.chrome = Some(chrome);
+        self.engine = Some(Engine::spawn());
+        self.window = Some(window);
         Ok(())
-    }
-
-    fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        let Some(gpu) = self.gpu.as_mut() else { return };
-        gpu.config.width = new_size.width.max(1);
-        gpu.config.height = new_size.height.max(1);
-        gpu.surface.configure(&gpu.device, &gpu.config);
     }
 
     fn render(&mut self) -> Result<()> {
         let Some(gpu) = self.gpu.as_mut() else { return Ok(()) };
         let Some(renderer) = self.renderer.as_mut() else { return Ok(()) };
+        let Some(chrome) = self.chrome.as_mut() else { return Ok(()) };
         let Some(engine) = self.engine.as_ref() else { return Ok(()) };
+        let Some(window) = self.window.as_ref() else { return Ok(()) };
 
         let frame = match gpu.surface.get_current_texture() {
             Ok(f) => f,
@@ -103,15 +73,32 @@ impl App {
             }
             Err(err) => return Err(anyhow::anyhow!("surface error: {err:?}")),
         };
-        let snapshot = engine.snapshot();
+
+        let app_snapshot = engine.snapshot();
+
+        // 1. Run egui for the frame and collect any menu-triggered actions.
+        let raw_input = chrome.winit_state.take_egui_input(window);
+        let mut pending_actions: Vec<Action> = Vec::new();
+        let full_output = chrome.ctx.run(raw_input, |ctx| {
+            draw_menu_bar(ctx, app_snapshot.history, &mut pending_actions);
+        });
+        for action in pending_actions {
+            action.dispatch(engine);
+        }
+
+        // 2. Vello paints the scene into the surface texture (own submit).
         renderer.render(
             &gpu.device,
             &gpu.queue,
-            &snapshot,
+            &app_snapshot.scene,
             &frame,
             gpu.config.width,
             gpu.config.height,
         )?;
+
+        // 3. egui overlays chrome on the same surface texture.
+        chrome.paint(gpu, window, &frame, full_output);
+
         frame.present();
         Ok(())
     }
@@ -126,6 +113,13 @@ impl App {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    /// True if the cursor is currently hovering over egui chrome (menu open, button, etc.).
+    fn pointer_over_chrome(&self) -> bool {
+        self.chrome
+            .as_ref()
+            .is_some_and(|c| c.ctx.is_pointer_over_area() || c.ctx.wants_pointer_input())
     }
 }
 
@@ -145,33 +139,49 @@ impl ApplicationHandler for App {
                 return;
             }
         };
-        if let Err(err) = self.init_gpu(&window) {
-            log::error!("gpu init failed: {err:?}");
+        if let Err(err) = self.init(window) {
+            log::error!("app init failed: {err:?}");
             event_loop.exit();
-            return;
         }
-        let Some(gpu) = self.gpu.as_ref() else {
-            event_loop.exit();
-            return;
-        };
-        match Renderer::new(&gpu.device, gpu.config.format) {
-            Ok(r) => self.renderer = Some(r),
-            Err(err) => {
-                log::error!("renderer init failed: {err:?}");
-                event_loop.exit();
-                return;
-            }
-        }
-        self.engine = Some(Engine::spawn());
-        self.window = Some(window);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // egui sees the event first so it can update hover/focus state.
+        let egui_consumed =
+            if let (Some(chrome), Some(window)) = (self.chrome.as_mut(), self.window.as_ref()) {
+                let response = chrome.winit_state.on_window_event(window, &event);
+                if response.repaint {
+                    window.request_redraw();
+                }
+                response.consumed
+            } else {
+                false
+            };
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                self.resize(size);
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.resize(size);
+                }
                 self.request_redraw();
+            }
+            WindowEvent::ModifiersChanged(mods) => {
+                self.modifiers = mods.state();
+            }
+            WindowEvent::KeyboardInput { event: key_event, .. } => {
+                if egui_consumed || key_event.state != ElementState::Pressed || key_event.repeat {
+                    return;
+                }
+                if let Some(action) = match_action(&key_event.logical_key, self.modifiers)
+                    && let Some(engine) = self.engine.as_ref()
+                {
+                    let snap = engine.snapshot();
+                    if action.enabled(snap.history) {
+                        action.dispatch(engine);
+                        self.request_redraw();
+                    }
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = Some(position);
@@ -187,6 +197,9 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => {
+                if egui_consumed || self.pointer_over_chrome() {
+                    return;
+                }
                 if let Some(pos) = self.cursor {
                     let id = StrokeId::next();
                     self.active_stroke = Some(id);
@@ -217,7 +230,12 @@ impl ApplicationHandler for App {
 }
 
 fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Quiet by default: warnings-and-above from dependencies, info-and-above from our own
+    // crates. Opt in to verbose third-party logging with e.g. `RUST_LOG=info` or target
+    // specific crates with `RUST_LOG=wgpu_core=debug,aj_engine=trace`.
+    let default_filter = "warn,aj_app=info,aj_core=info,aj_engine=info,aj_render=info";
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_filter))
+        .init();
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = App::new();
