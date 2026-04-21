@@ -1,0 +1,14 @@
+[package]
+name = "aj-convert"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "CBOR <-> RON converter CLI for art-junk document files."
+
+[lints]
+workspace = true
+
+[dependencies]

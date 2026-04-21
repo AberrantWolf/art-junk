@@ -1,0 +1,14 @@
+[package]
+name = "aj-format"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Serialization (CBOR + RON) and I/O adapters for art-junk documents."
+
+[lints]
+workspace = true
+
+[dependencies]

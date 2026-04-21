@@ -1,0 +1,51 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/aj-core",
+    "crates/aj-engine",
+    "crates/aj-format",
+    "crates/aj-stylus",
+    "crates/aj-render",
+    "crates/aj-effects",
+    "crates/aj-app",
+    "tools/aj-convert",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Scott Harper"]
+repository = "https://github.com/scottjharper/art-junk"
+
+[workspace.dependencies]
+aj-core    = { path = "crates/aj-core" }
+aj-engine  = { path = "crates/aj-engine" }
+aj-format  = { path = "crates/aj-format" }
+aj-stylus  = { path = "crates/aj-stylus" }
+aj-render  = { path = "crates/aj-render" }
+aj-effects = { path = "crates/aj-effects" }
+
+wgpu = "22"
+winit = "0.30"
+pollster = "0.4"
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+
+kurbo = "0.11"
+vello = "0.3"
+arc-swap = "1"
+crossbeam-channel = "0.5"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

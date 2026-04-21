@@ -1,0 +1,14 @@
+[package]
+name = "aj-stylus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Cross-platform stylus input and palm-rejection abstraction for art-junk."
+
+[lints]
+workspace = true
+
+[dependencies]

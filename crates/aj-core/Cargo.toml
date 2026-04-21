@@ -1,0 +1,15 @@
+[package]
+name = "aj-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Scene-graph data types and domain model for art-junk."
+
+[lints]
+workspace = true
+
+[dependencies]
+kurbo.workspace = true
