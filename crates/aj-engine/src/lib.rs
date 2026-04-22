@@ -40,9 +40,18 @@ pub enum Command {
     // TODO(undoable-page-edits): page mutations are currently non-undoable. They are
     // document-level attributes and arguably belong on the history stack; revisit
     // once we have a second mutation category that needs the same treatment.
+    // Brush commands follow the same pattern for the same reasons.
     SetPageSize(Size),
     SetShowBounds(bool),
     SetClipToBounds(bool),
+    /// Sets `max_width` directly; propagates proportionally into `min_width`
+    /// to preserve the user's ratio. Engine is authoritative for the math.
+    SetBrushMaxWidth(f32),
+    /// Sets `min_width` directly; redefines the ratio.
+    SetBrushMinWidth(f32),
+    /// Sets `min_width` as a ratio of the current max, clamped to `[0, 1]`.
+    /// Used by the min-ratio slider and `Alt+[` / `Alt+]` shortcuts.
+    SetBrushMinRatio(f32),
     Undo,
     Redo,
     Shutdown,
@@ -133,6 +142,15 @@ pub fn apply(cmd: Command, state: &mut EngineState) -> ApplyOutcome {
         }
         Command::SetClipToBounds(clip) => {
             state.doc.set_clip_to_bounds(clip);
+        }
+        Command::SetBrushMaxWidth(v) => {
+            state.doc.set_brush_max_width(v);
+        }
+        Command::SetBrushMinWidth(v) => {
+            state.doc.set_brush_min_width(v);
+        }
+        Command::SetBrushMinRatio(r) => {
+            state.doc.set_brush_min_ratio(r);
         }
         Command::Undo => {
             if state.doc.has_active_stroke() {
@@ -252,6 +270,42 @@ mod tests {
         apply(Command::SetShowBounds(false), &mut state);
         apply(Command::SetClipToBounds(true), &mut state);
         apply(Command::SetPageSize(Size::new(800.0, 600.0)), &mut state);
+        let status = state.history.status();
+        assert!(!status.can_undo);
+        assert!(!status.can_redo);
+    }
+
+    #[test]
+    fn set_brush_max_width_propagates_through_snapshot() {
+        let mut state = EngineState::new();
+        state.doc.set_brush(BrushParams { min_width: 2.0, max_width: 8.0, ..Default::default() });
+        apply(Command::SetBrushMaxWidth(16.0), &mut state);
+        let b = state.snapshot().scene.brush;
+        assert!((b.max_width - 16.0).abs() < f32::EPSILON);
+        assert!((b.min_width - 4.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn set_brush_min_width_propagates_through_snapshot() {
+        let mut state = EngineState::new();
+        apply(Command::SetBrushMinWidth(1.5), &mut state);
+        assert!((state.snapshot().scene.brush.min_width - 1.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn set_brush_min_ratio_propagates_through_snapshot() {
+        let mut state = EngineState::new();
+        state.doc.set_brush(BrushParams { min_width: 0.5, max_width: 4.0, ..Default::default() });
+        apply(Command::SetBrushMinRatio(0.75), &mut state);
+        assert!((state.snapshot().scene.brush.min_width - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn brush_commands_do_not_touch_history() {
+        let mut state = EngineState::new();
+        apply(Command::SetBrushMaxWidth(10.0), &mut state);
+        apply(Command::SetBrushMinWidth(2.0), &mut state);
+        apply(Command::SetBrushMinRatio(0.3), &mut state);
         let status = state.history.status();
         assert!(!status.can_undo);
         assert!(!status.can_redo);

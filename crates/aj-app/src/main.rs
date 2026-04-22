@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use aj_core::{BrushParams, Point, PointerId, Size, StrokeId, Vec2};
+use aj_core::{Point, PointerId, Size, StrokeId, Vec2};
 use aj_engine::{Command, Engine};
 use aj_render::Renderer;
 #[cfg(target_os = "macos")]
@@ -25,7 +25,7 @@ use winit::window::{Window, WindowId};
 use crate::compose::Chrome;
 use crate::gpu::GpuState;
 use crate::shortcuts::AppAction;
-use crate::ui::{Action, ViewAction, draw_menu_bar};
+use crate::ui::{Action, BrushAction, ViewAction, draw_menu_bar};
 use crate::viewport::{Viewport, ZOOM_STEP};
 
 /// Each "line" of scroll-wheel movement represents this many physical pixels when
@@ -61,6 +61,10 @@ struct App {
     modifiers: ModifiersState,
     viewport: Viewport,
     dpi_scale: f64,
+    /// Whether the right-side brush settings panel is drawn. Pure UI state —
+    /// not part of the document, not in the engine. Toggled via
+    /// `View > Brush Panel`.
+    brush_panel_visible: bool,
 }
 
 impl App {
@@ -79,6 +83,7 @@ impl App {
             modifiers: ModifiersState::empty(),
             viewport: Viewport::default(),
             dpi_scale: 1.0,
+            brush_panel_visible: true,
         }
     }
 
@@ -116,21 +121,34 @@ impl App {
     fn render(&mut self) -> Result<()> {
         // Phase A: run egui, collect actions. Scoped so the mutable `chrome` borrow
         // ends before we call `apply_view_action` (which takes &mut self).
-        let (app_snapshot, full_output, pending_edit, pending_view, page);
+        let (
+            app_snapshot,
+            full_output,
+            pending_edit,
+            pending_view,
+            pending_brush,
+            page,
+            live_brush,
+        );
         {
             let Some(chrome) = self.chrome.as_mut() else { return Ok(()) };
             let Some(engine) = self.engine.as_ref() else { return Ok(()) };
             let Some(window) = self.window.as_ref() else { return Ok(()) };
             app_snapshot = engine.snapshot();
             page = app_snapshot.scene.page;
+            live_brush = app_snapshot.scene.brush;
+            let panel_visible = self.brush_panel_visible;
             let raw_input = chrome.winit_state.take_egui_input(window);
             let mut edit: Vec<Action> = Vec::new();
             let mut view: Vec<ViewAction> = Vec::new();
+            let mut brush: Vec<BrushAction> = Vec::new();
             full_output = chrome.ctx.run(raw_input, |ctx| {
-                draw_menu_bar(ctx, app_snapshot.history, page, &mut edit, &mut view);
+                draw_menu_bar(ctx, app_snapshot.history, page, panel_visible, &mut edit, &mut view);
+                crate::ui::brush_panel::draw(ctx, live_brush, panel_visible, &mut brush);
             });
             pending_edit = edit;
             pending_view = view;
+            pending_brush = brush;
         }
 
         // Phase B: dispatch actions. No chrome borrow held, so `apply_view_action`
@@ -138,6 +156,9 @@ impl App {
         if let Some(engine) = self.engine.as_ref() {
             for action in pending_edit {
                 action.dispatch(engine);
+            }
+            for action in pending_brush {
+                action.dispatch(engine, live_brush);
             }
         }
         for view_action in pending_view {
@@ -220,6 +241,9 @@ impl App {
             }
             ViewAction::ToggleClipToBounds => {
                 self.send(Command::SetClipToBounds(!page.clip_to_bounds));
+            }
+            ViewAction::ToggleBrushPanel => {
+                self.brush_panel_visible = !self.brush_panel_visible;
             }
         }
         self.request_redraw();
@@ -362,7 +386,9 @@ impl App {
         if egui_consumed || key_event.state != ElementState::Pressed || key_event.repeat {
             return;
         }
-        let Some(app_action) = shortcuts::resolve(&key_event.logical_key, self.modifiers) else {
+        let Some(app_action) =
+            shortcuts::resolve(&key_event.logical_key, key_event.physical_key, self.modifiers)
+        else {
             return;
         };
         match app_action {
@@ -379,6 +405,13 @@ impl App {
                 let page =
                     self.engine.as_ref().map(|e| e.snapshot().scene.page).unwrap_or_default();
                 self.apply_view_action(view_action, page);
+            }
+            AppAction::Brush(brush_action) => {
+                if let Some(engine) = self.engine.as_ref() {
+                    let snap = engine.snapshot();
+                    brush_action.dispatch(engine, snap.scene.brush);
+                    self.request_redraw();
+                }
             }
         }
     }
@@ -434,7 +467,12 @@ impl App {
             Phase::Down => {
                 let id = StrokeId::next();
                 self.active = Some((pointer_id, id));
-                self.send(Command::BeginStroke { id, sample, caps, brush: BrushParams::default() });
+                // Freeze the current live brush into this stroke. Subsequent
+                // slider / shortcut changes won't alter what this stroke
+                // renders with; only the next BeginStroke picks up changes.
+                let brush =
+                    self.engine.as_ref().map(|e| e.snapshot().scene.brush).unwrap_or_default();
+                self.send(Command::BeginStroke { id, sample, caps, brush });
                 self.request_redraw();
             }
             Phase::Move => {

@@ -22,6 +22,7 @@ sequenceDiagram
   UI->>VP: screen_to_world(sample.position) → world-space sample
   UI->>Eng: Command::BeginStroke { id, sample, caps, brush } / AddSample / EndStroke<br/>   or Command::ReviseSample { stroke_id, update_index, revision }
   UI->>Eng: Command::SetPageSize / SetShowBounds / SetClipToBounds
+  UI->>Eng: Command::SetBrushMaxWidth / SetBrushMinWidth / SetBrushMinRatio (sliders + [ / ] / Alt+[ / Alt+])
   UI->>VP: mutate on MouseWheel / PinchGesture / ViewAction
   Eng->>His: record inverse on EndStroke; pop / push on Undo / Redo
   Eng->>Snap: store(Arc::new(AppSnapshot { scene: SceneSnapshot { page, strokes }, history }))
@@ -89,6 +90,29 @@ sequenceDiagram
   Milestone 1, but iOS PencilKit's late-arriving estimation-resolution updates
   can be landed later by walking the active stroke and replacing samples
   matching `update_index` — no schema migration needed.
+- **Brush: live vs. frozen.** `DocumentState::brush` is the live document
+  brush — what a fresh stroke will be stamped with on the next `BeginStroke`.
+  `Stroke::brush` is the snapshot taken at `BeginStroke` time and frozen for
+  that stroke's lifetime. The renderer reads the latter; the brush panel
+  reads `SceneSnapshot::brush` (the live one) to drive sliders. Mid-stroke
+  slider changes don't affect the in-progress stroke — only the next one.
+- **Ratio preservation in the engine.** `set_brush_max_width` computes the
+  current `min/max` ratio and applies it to the new max so the user-perceived
+  dynamics ratio stays constant. The ratio is the primary cognitive state;
+  `min_width` (stored absolute) is effectively a cache of `ratio * max_width`.
+  Sliders and `[` / `]` both funnel through `Command::SetBrushMaxWidth`;
+  `Command::SetBrushMinRatio` handles the min-ratio slider and `Alt+[` /
+  `Alt+]`. No floor on min — vector rendering handles sub-pixel widths.
+- **Ribbon tessellation.** `aj-render::brush::ribbon::tessellate_stroke`
+  fits a centripetal Catmull-Rom spline through sample positions, arc-length-
+  tessellates each `CubicBez` at ~1 physical px, emits a filled polygon
+  (left rail forward, right rail reversed) with round caps at each endpoint.
+  Runs every frame — caching is a future optimization pass.
+- **Shortcut registry dispatches on `(logical, physical, modifiers)`.**
+  Alphabetic bindings (`Cmd+Z` etc.) match on `Key::Character` for
+  keyboard-layout robustness. Non-alphabetic bindings like `[` / `]` /
+  `Alt+[` match on `PhysicalKey::Code(KeyCode::*)` because on macOS Alt
+  composes replacement characters that would bypass logical-key matching.
 - UI never mutates `DocumentState` directly — every change is a `Command` on a channel.
 - The engine drains commands (recv + try_recv) and publishes a single `AppSnapshot` per
   batch, so burst input does not cause snapshot thrash.

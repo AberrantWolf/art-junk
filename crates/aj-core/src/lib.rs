@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub mod input;
 
 pub use input::{
-    BrushParams, PointerId, PressureCurve, Sample, SampleClass, SampleRevision, StylusButtons,
-    Tilt, ToolCaps, ToolKind,
+    BrushParams, MAX_WIDTH_MAX, MAX_WIDTH_MIN, PointerId, PressureCurve, Sample, SampleClass,
+    SampleRevision, StylusButtons, Tilt, ToolCaps, ToolKind,
 };
 // TODO(f32-migration): stored point coordinates are currently f64 via kurbo. We may
 // want to move to an f32 newtype once `aj-format` defines a persistence schema or
@@ -55,6 +55,11 @@ pub struct Stroke {
 #[derive(Debug, Clone, Default)]
 pub struct SceneSnapshot {
     pub page: Page,
+    /// The *live* document brush — what a fresh stroke will be stamped with on
+    /// the next `BeginStroke`. The UI reads this to populate slider values.
+    /// The renderer does NOT read this; each `Stroke` carries its own
+    /// `brush` frozen at `BeginStroke` time.
+    pub brush: BrushParams,
     pub strokes: Vec<Stroke>,
 }
 
@@ -65,6 +70,7 @@ pub struct SceneSnapshot {
 #[derive(Debug, Default)]
 pub struct DocumentState {
     page: Page,
+    brush: BrushParams,
     strokes: Vec<Stroke>,
     active: Option<Stroke>,
 }
@@ -90,6 +96,46 @@ impl DocumentState {
 
     pub fn set_clip_to_bounds(&mut self, clip: bool) {
         self.page.clip_to_bounds = clip;
+    }
+
+    #[must_use]
+    pub fn brush(&self) -> BrushParams {
+        self.brush
+    }
+
+    pub fn set_brush(&mut self, brush: BrushParams) {
+        self.brush = brush;
+    }
+
+    /// Set the maximum width and propagate proportionally to `min_width`
+    /// so the user-perceived ratio (`min/max`) is preserved exactly across
+    /// the change. The ratio is the primary cognitive state; the absolute
+    /// `min_width` is effectively a cache. No floor on the computed min —
+    /// vector rendering handles sub-pixel widths.
+    pub fn set_brush_max_width(&mut self, v: f32) {
+        let old_max = self.brush.max_width;
+        let old_min = self.brush.min_width;
+        let new_max = v.clamp(input::MAX_WIDTH_MIN, input::MAX_WIDTH_MAX);
+        // Guard against a divide-by-zero that can't happen given the clamp on
+        // old_max, but belt-and-suspenders.
+        let ratio = if old_max > 0.0 { old_min / old_max } else { 1.0 };
+        self.brush.max_width = new_max;
+        self.brush.min_width = ratio * new_max;
+    }
+
+    /// Set the minimum width directly (redefines the ratio). Clamped to
+    /// `[0.0, current_max]`.
+    pub fn set_brush_min_width(&mut self, v: f32) {
+        let max = self.brush.max_width;
+        self.brush.min_width = v.clamp(0.0, max);
+    }
+
+    /// Set the minimum as a ratio of the current max. `ratio` is clamped to
+    /// `[0.0, 1.0]`. Used by the min-ratio slider and the `Alt+[` / `Alt+]`
+    /// shortcuts; no drift across successive ratio edits.
+    pub fn set_brush_min_ratio(&mut self, ratio: f32) {
+        let ratio = ratio.clamp(0.0, 1.0);
+        self.brush.min_width = ratio * self.brush.max_width;
     }
 
     pub fn begin_stroke(&mut self, stroke: Stroke) {
@@ -156,7 +202,7 @@ impl DocumentState {
         if let Some(active) = &self.active {
             strokes.push(active.clone());
         }
-        SceneSnapshot { page: self.page, strokes }
+        SceneSnapshot { page: self.page, brush: self.brush, strokes }
     }
 }
 
@@ -366,6 +412,83 @@ mod tests {
         let mut doc = DocumentState::new();
         doc.begin_stroke(stroke(1, &[(0.0, 0.0)])); // Committed sample, no Estimated
         assert!(!doc.revise_sample(StrokeId(1), 99, SampleRevision::default()));
+    }
+
+    #[test]
+    fn default_brush_matches_brush_params_default() {
+        let doc = DocumentState::new();
+        assert_eq!(doc.brush(), BrushParams::default());
+    }
+
+    #[test]
+    fn set_brush_max_width_preserves_ratio() {
+        let mut doc = DocumentState::new();
+        doc.set_brush(BrushParams { min_width: 2.0, max_width: 8.0, ..Default::default() });
+        doc.set_brush_max_width(16.0);
+        let b = doc.brush();
+        assert!((b.max_width - 16.0).abs() < f32::EPSILON);
+        assert!((b.min_width - 4.0).abs() < f32::EPSILON); // ratio 0.25 preserved
+    }
+
+    #[test]
+    fn set_brush_max_width_clamps_to_bounds() {
+        let mut doc = DocumentState::new();
+        doc.set_brush_max_width(1000.0);
+        assert!((doc.brush().max_width - MAX_WIDTH_MAX).abs() < f32::EPSILON);
+        doc.set_brush_max_width(-5.0);
+        assert!((doc.brush().max_width - MAX_WIDTH_MIN).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn set_brush_max_width_min_equals_max_scales_both() {
+        let mut doc = DocumentState::new();
+        doc.set_brush(BrushParams { min_width: 4.0, max_width: 4.0, ..Default::default() });
+        doc.set_brush_max_width(8.0);
+        assert!((doc.brush().min_width - 8.0).abs() < f32::EPSILON);
+        assert!((doc.brush().max_width - 8.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn set_brush_max_width_below_current_min_drags_min_down() {
+        // Policy: ratio is primary. When max shrinks below current min,
+        // min follows proportionally. No floor — sub-pixel OK.
+        let mut doc = DocumentState::new();
+        doc.set_brush(BrushParams { min_width: 5.0, max_width: 8.0, ..Default::default() });
+        doc.set_brush_max_width(3.0);
+        let b = doc.brush();
+        assert!((b.max_width - 3.0).abs() < f32::EPSILON);
+        // ratio was 5/8 = 0.625; 0.625 * 3 = 1.875
+        assert!((b.min_width - 1.875).abs() < 1e-5);
+    }
+
+    #[test]
+    fn set_brush_min_width_clamps_to_max() {
+        let mut doc = DocumentState::new();
+        doc.set_brush(BrushParams { min_width: 1.0, max_width: 4.0, ..Default::default() });
+        doc.set_brush_min_width(10.0);
+        assert!((doc.brush().min_width - 4.0).abs() < f32::EPSILON);
+        doc.set_brush_min_width(-1.0);
+        assert!(doc.brush().min_width.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn set_brush_min_ratio_maps_to_width() {
+        let mut doc = DocumentState::new();
+        doc.set_brush(BrushParams { min_width: 1.0, max_width: 4.0, ..Default::default() });
+        doc.set_brush_min_ratio(0.5);
+        assert!((doc.brush().min_width - 2.0).abs() < f32::EPSILON);
+        doc.set_brush_min_ratio(1.5);
+        assert!((doc.brush().min_width - 4.0).abs() < f32::EPSILON); // clamped
+        doc.set_brush_min_ratio(-0.5);
+        assert!(doc.brush().min_width.abs() < f32::EPSILON); // clamped
+    }
+
+    #[test]
+    fn snapshot_carries_brush() {
+        let mut doc = DocumentState::new();
+        doc.set_brush_max_width(12.0);
+        let snap = doc.snapshot();
+        assert!((snap.brush.max_width - 12.0).abs() < f32::EPSILON);
     }
 
     #[test]

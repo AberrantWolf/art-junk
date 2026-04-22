@@ -1,8 +1,10 @@
 //! Vello-based rendering pipeline for art-junk scenes.
 
+mod brush;
+
 use aj_core::SceneSnapshot;
-use vello::kurbo::{Affine, BezPath, Rect, Stroke as KStroke};
-use vello::peniko::{Color, Mix};
+use vello::kurbo::{Affine, Rect, Stroke as KStroke};
+use vello::peniko::{Color, Fill, Mix};
 use vello::{AaConfig, AaSupport, RenderParams, Renderer as VelloRenderer, RendererOptions, Scene};
 
 pub struct Renderer {
@@ -36,8 +38,6 @@ impl Renderer {
         height: u32,
     ) -> anyhow::Result<()> {
         let mut scene = Scene::new();
-        let stroke_style = KStroke::new(2.0);
-        let cyan = Color::rgb8(0, 200, 220);
         let page = snapshot.page;
         let page_rect = Rect::from_origin_size((0.0, 0.0), page.size);
 
@@ -47,19 +47,18 @@ impl Renderer {
         if page.clip_to_bounds {
             scene.push_layer(Mix::Clip, 1.0, world_to_screen, &page_rect);
         }
+        // TODO(m4-tessellation-cache): tessellate_stroke runs every frame for
+        // every stroke. For large scenes / long strokes this is wasteful; key
+        // a cache on (stroke.id, samples.len(), brush-hash, screen-scale bucket)
+        // and reuse the BezPath when inputs are unchanged.
         for s in &snapshot.strokes {
-            if s.samples.len() < 2 {
+            let path = brush::tessellate_stroke(s, world_to_screen);
+            if path.elements().is_empty() {
                 continue;
             }
-            let mut path = BezPath::new();
-            path.move_to(s.samples[0].position);
-            for sample in &s.samples[1..] {
-                path.line_to(sample.position);
-            }
-            // Passing world_to_screen here (rather than pre-transforming `path`)
-            // makes stroke widths scale with zoom, which is what vectors should do —
-            // this is what demonstrates the app's vector-drawing nature.
-            scene.stroke(&stroke_style, world_to_screen, cyan, None, &path);
+            let [r, g, b, a] = s.brush.color;
+            let color = Color::rgba8(r, g, b, a);
+            scene.fill(Fill::NonZero, world_to_screen, color, None, &path);
         }
         if page.clip_to_bounds {
             scene.pop_layer();

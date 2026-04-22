@@ -4,12 +4,16 @@
 //! owns the *semantics* of each action (label, enablement, dispatch) and the
 //! layout of the menu bar. Adding a new action here; binding it to a key there.
 
-use aj_core::{HistoryStatus, Page};
+pub mod brush_panel;
+
+use aj_core::{BrushParams, HistoryStatus, Page};
 use aj_engine::{Command, Engine};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
-use crate::shortcuts::{self, AppAction};
+use crate::shortcuts::{
+    self, AppAction, BRUSH_MIN_RATIO_STEP, BRUSH_WIDTH_FACTOR_DECR, BRUSH_WIDTH_FACTOR_INCR,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum Action {
@@ -49,6 +53,51 @@ pub enum ViewAction {
     ResetView,
     TogglePageBounds,
     ToggleClipToBounds,
+    ToggleBrushPanel,
+}
+
+/// Brush-related actions. UI (sliders, menu checkbox) and keyboard shortcuts
+/// both funnel through these. `SetMaxWidth` / `SetMinWidth` / `SetMinRatio`
+/// carry absolute values that the engine clamps; the shortcut variants are
+/// multiplicative/additive deltas that the dispatcher resolves against the
+/// current live brush.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BrushAction {
+    SetMaxWidth(f32),
+    SetMinRatio(f32),
+    DecreaseMaxWidth,
+    IncreaseMaxWidth,
+    DecreaseMinRatio,
+    IncreaseMinRatio,
+}
+
+impl BrushAction {
+    pub fn dispatch(self, engine: &Engine, current: BrushParams) {
+        let cmd = match self {
+            Self::SetMaxWidth(v) => Command::SetBrushMaxWidth(v),
+            Self::SetMinRatio(r) => Command::SetBrushMinRatio(r),
+            Self::DecreaseMaxWidth => {
+                Command::SetBrushMaxWidth(current.max_width * BRUSH_WIDTH_FACTOR_DECR)
+            }
+            Self::IncreaseMaxWidth => {
+                Command::SetBrushMaxWidth(current.max_width * BRUSH_WIDTH_FACTOR_INCR)
+            }
+            Self::DecreaseMinRatio => {
+                let ratio = current_ratio(current) - BRUSH_MIN_RATIO_STEP;
+                Command::SetBrushMinRatio(ratio)
+            }
+            Self::IncreaseMinRatio => {
+                let ratio = current_ratio(current) + BRUSH_MIN_RATIO_STEP;
+                Command::SetBrushMinRatio(ratio)
+            }
+        };
+        engine.send(cmd);
+    }
+}
+
+/// Current min/max ratio, clamped to [0, 1] and guarded against divide-by-zero.
+fn current_ratio(brush: BrushParams) -> f32 {
+    if brush.max_width > 0.0 { (brush.min_width / brush.max_width).clamp(0.0, 1.0) } else { 0.0 }
 }
 
 /// Render the top menu bar and collect any actions the user triggered by clicking
@@ -58,6 +107,7 @@ pub fn draw_menu_bar(
     ctx: &egui::Context,
     history: HistoryStatus,
     page: Page,
+    brush_panel_visible: bool,
     pending_edit: &mut Vec<Action>,
     pending_view: &mut Vec<ViewAction>,
 ) {
@@ -109,6 +159,12 @@ pub fn draw_menu_bar(
                 let mut clip = page.clip_to_bounds;
                 if ui.checkbox(&mut clip, "Clip strokes to page").changed() {
                     pending_view.push(ViewAction::ToggleClipToBounds);
+                    ui.close_menu();
+                }
+                ui.separator();
+                let mut panel = brush_panel_visible;
+                if ui.checkbox(&mut panel, "Brush panel").changed() {
+                    pending_view.push(ViewAction::ToggleBrushPanel);
                     ui.close_menu();
                 }
             });
