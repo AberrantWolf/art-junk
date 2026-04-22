@@ -350,19 +350,19 @@ impl ApplicationHandler for App {
             | WindowEvent::CursorLeft { .. } => {
                 self.route_input(egui_consumed, &event);
             }
-            WindowEvent::MouseWheel { delta, .. } => {
-                if !egui_consumed && !self.pointer_over_chrome() {
-                    self.handle_wheel(delta);
-                }
+            WindowEvent::MouseWheel { delta, .. }
+                if !egui_consumed && !self.pointer_over_chrome() =>
+            {
+                self.handle_wheel(delta);
             }
-            WindowEvent::PinchGesture { delta, .. } => {
-                // delta may be NaN per winit docs — guard before it propagates into
-                // translate_pt and silently breaks the viewport.
-                if !egui_consumed && !self.pointer_over_chrome() && delta.is_finite() {
-                    // macOS reports small per-tick deltas (~0.01); `1 + delta` is the
-                    // natural zoom factor (positive = pinch-out = zoom in).
-                    self.zoom_by(1.0 + delta);
-                }
+            // delta may be NaN per winit docs — guard before it propagates into
+            // translate_pt and silently breaks the viewport.
+            WindowEvent::PinchGesture { delta, .. }
+                if !egui_consumed && !self.pointer_over_chrome() && delta.is_finite() =>
+            {
+                // macOS reports small per-tick deltas (~0.01); `1 + delta` is the
+                // natural zoom factor (positive = pinch-out = zoom in).
+                self.zoom_by(1.0 + delta);
             }
             WindowEvent::RedrawRequested => {
                 if let Err(err) = self.render() {
