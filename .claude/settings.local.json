@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.w3.org)",
+      "WebFetch(domain:wayland.app)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:developer-docs.wacom.com)",
+      "WebFetch(domain:wayland.freedesktop.org)",
+      "Bash(cargo build *)",
+      "Bash(cargo test *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt *)",
+      "Bash(gh api *)",
+      "Bash(gh search *)",
+      "Bash(xargs curl *)",
+      "Read(//tmp/**)",
+      "Bash(gh issue *)",
+      "Bash(gh pr *)"
+    ]
+  }
+}

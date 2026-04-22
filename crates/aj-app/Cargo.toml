@@ -15,6 +15,7 @@ workspace = true
 aj-core.workspace = true
 aj-engine.workspace = true
 aj-render.workspace = true
+aj-stylus.workspace = true
 
 anyhow.workspace = true
 env_logger.workspace = true

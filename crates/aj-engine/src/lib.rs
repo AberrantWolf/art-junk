@@ -3,15 +3,40 @@
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-use aj_core::{AppSnapshot, DocumentState, Edit, HistoryStatus, Point, Size, Stroke, StrokeId};
+use aj_core::{
+    AppSnapshot, BrushParams, DocumentState, Edit, HistoryStatus, Sample, SampleRevision, Size,
+    Stroke, StrokeId, ToolCaps,
+};
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
-#[derive(Debug, Clone, Copy)]
+/// Command is `Clone` (not `Copy`) because `Sample` carries optional platform
+/// fields that may grow. Call sites send once, so losing `Copy` is free.
+#[derive(Debug, Clone)]
 pub enum Command {
-    BeginStroke { id: StrokeId, point: Point },
-    AddSample { id: StrokeId, point: Point },
-    EndStroke { id: StrokeId },
+    BeginStroke {
+        id: StrokeId,
+        sample: Sample,
+        caps: ToolCaps,
+        brush: BrushParams,
+    },
+    AddSample {
+        id: StrokeId,
+        sample: Sample,
+    },
+    /// Update an earlier `Estimated` sample with finalized field values. Sent
+    /// by platforms that deliver initial samples before the hardware has fully
+    /// reported (macOS `NSEvent` tablet, iOS Pencil). Pre-commit only — the
+    /// revision mutates an existing sample in the active stroke (or the most
+    /// recently committed stroke, as a race-rescue), never creates history.
+    ReviseSample {
+        stroke_id: StrokeId,
+        update_index: u64,
+        revision: SampleRevision,
+    },
+    EndStroke {
+        id: StrokeId,
+    },
     // TODO(undoable-page-edits): page mutations are currently non-undoable. They are
     // document-level attributes and arguably belong on the history stack; revisit
     // once we have a second mutation category that needs the same treatment.
@@ -82,11 +107,14 @@ pub enum ApplyOutcome {
 /// so tests drive it directly.
 pub fn apply(cmd: Command, state: &mut EngineState) -> ApplyOutcome {
     match cmd {
-        Command::BeginStroke { id, point } => {
-            state.doc.begin_stroke(Stroke { id, points: vec![point] });
+        Command::BeginStroke { id, sample, caps, brush } => {
+            state.doc.begin_stroke(Stroke { id, samples: vec![sample], caps, brush });
         }
-        Command::AddSample { id, point } => {
-            state.doc.add_sample(id, point);
+        Command::AddSample { id, sample } => {
+            state.doc.add_sample(id, sample);
+        }
+        Command::ReviseSample { stroke_id, update_index, revision } => {
+            state.doc.revise_sample(stroke_id, update_index, revision);
         }
         Command::EndStroke { id } => {
             if let Some(stroke) = state.doc.end_stroke(id) {

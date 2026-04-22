@@ -48,13 +48,13 @@ impl Renderer {
             scene.push_layer(Mix::Clip, 1.0, world_to_screen, &page_rect);
         }
         for s in &snapshot.strokes {
-            if s.points.len() < 2 {
+            if s.samples.len() < 2 {
                 continue;
             }
             let mut path = BezPath::new();
-            path.move_to(s.points[0]);
-            for p in &s.points[1..] {
-                path.line_to(*p);
+            path.move_to(s.samples[0].position);
+            for sample in &s.samples[1..] {
+                path.line_to(sample.position);
             }
             // Passing world_to_screen here (rather than pre-transforming `path`)
             // makes stroke widths scale with zoom, which is what vectors should do —

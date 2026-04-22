@@ -3,6 +3,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod input;
+
+pub use input::{
+    BrushParams, PointerId, PressureCurve, Sample, SampleClass, SampleRevision, StylusButtons,
+    Tilt, ToolCaps, ToolKind,
+};
 // TODO(f32-migration): stored point coordinates are currently f64 via kurbo. We may
 // want to move to an f32 newtype once `aj-format` defines a persistence schema or
 // long-session memory pressure becomes real. GPU render precision is f32 regardless
@@ -39,7 +45,9 @@ impl StrokeId {
 #[derive(Debug, Clone)]
 pub struct Stroke {
     pub id: StrokeId,
-    pub points: Vec<Point>,
+    pub samples: Vec<Sample>,
+    pub caps: ToolCaps,
+    pub brush: BrushParams,
 }
 
 /// Read-only view of the scene published to the renderer via `ArcSwap`. Includes
@@ -88,12 +96,43 @@ impl DocumentState {
         self.active = Some(stroke);
     }
 
-    pub fn add_sample(&mut self, id: StrokeId, point: Point) {
+    pub fn add_sample(&mut self, id: StrokeId, sample: Sample) {
         if let Some(active) = self.active.as_mut()
             && active.id == id
         {
-            active.points.push(point);
+            active.samples.push(sample);
         }
+    }
+
+    /// Applies a revision to an earlier sample in the named stroke. Searches
+    /// the active stroke first, then falls back to the most recently committed
+    /// stroke — revisions can race with `EndStroke` on single-tap inputs, and
+    /// the one-stroke fallback is cheap and avoids warn-spam. The sample must
+    /// carry `SampleClass::Estimated { update_index }` matching the request;
+    /// on apply, the class is promoted to `Committed` so future revisions for
+    /// the same index are ignored.
+    pub fn revise_sample(
+        &mut self,
+        id: StrokeId,
+        update_index: u64,
+        revision: SampleRevision,
+    ) -> bool {
+        if let Some(active) = self.active.as_mut()
+            && active.id == id
+            && revise_in_stroke(active, update_index, revision)
+        {
+            return true;
+        }
+        if let Some(last) = self.strokes.last_mut()
+            && last.id == id
+            && revise_in_stroke(last, update_index, revision)
+        {
+            return true;
+        }
+        log::warn!(
+            "revise_sample: no Estimated sample with update_index {update_index} in stroke {id:?}"
+        );
+        false
     }
 
     /// Finalizes and returns the active stroke if its id matches.
@@ -119,6 +158,20 @@ impl DocumentState {
         }
         SceneSnapshot { page: self.page, strokes }
     }
+}
+
+/// Walk a stroke's samples in reverse (revisions are almost always for the
+/// newest-1 sample) and apply the revision to the first matching Estimated
+/// sample found.
+fn revise_in_stroke(stroke: &mut Stroke, update_index: u64, revision: SampleRevision) -> bool {
+    for sample in stroke.samples.iter_mut().rev() {
+        if matches!(sample.class, SampleClass::Estimated { update_index: i } if i == update_index) {
+            revision.apply_to(sample);
+            sample.class = SampleClass::Committed;
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
@@ -172,10 +225,21 @@ pub struct AppSnapshot {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
+    fn sample_at(x: f64, y: f64) -> Sample {
+        Sample::mouse(Point::new(x, y), Duration::ZERO, PointerId::MOUSE)
+    }
+
     fn stroke(id: u64, points: &[(f64, f64)]) -> Stroke {
-        Stroke { id: StrokeId(id), points: points.iter().map(|&(x, y)| Point::new(x, y)).collect() }
+        Stroke {
+            id: StrokeId(id),
+            samples: points.iter().map(|&(x, y)| sample_at(x, y)).collect(),
+            caps: ToolCaps::empty(),
+            brush: BrushParams::default(),
+        }
     }
 
     #[test]
@@ -190,7 +254,7 @@ mod tests {
         match redo {
             Edit::AddStroke(restored) => {
                 assert_eq!(restored.id, s.id);
-                assert_eq!(restored.points.len(), s.points.len());
+                assert_eq!(restored.samples.len(), s.samples.len());
             }
             Edit::RemoveStroke(_) => panic!("expected AddStroke as inverse of remove"),
         }
@@ -248,9 +312,80 @@ mod tests {
     fn end_stroke_returns_active_and_clears() {
         let mut doc = DocumentState::new();
         doc.begin_stroke(stroke(7, &[(0.0, 0.0)]));
-        doc.add_sample(StrokeId(7), Point::new(1.0, 1.0));
+        doc.add_sample(StrokeId(7), sample_at(1.0, 1.0));
         let s = doc.end_stroke(StrokeId(7)).expect("active stroke");
-        assert_eq!(s.points.len(), 2);
+        assert_eq!(s.samples.len(), 2);
         assert!(!doc.has_active_stroke());
+    }
+
+    fn estimated_sample_at(x: f64, y: f64, update_index: u64, pressure: f32) -> Sample {
+        let mut s = Sample::mouse(Point::new(x, y), Duration::ZERO, PointerId::MOUSE);
+        s.class = SampleClass::Estimated { update_index };
+        s.pressure = pressure;
+        s
+    }
+
+    #[test]
+    fn revise_sample_updates_active_stroke_and_promotes_to_committed() {
+        let mut doc = DocumentState::new();
+        let s = Stroke {
+            id: StrokeId(1),
+            samples: vec![estimated_sample_at(0.0, 0.0, 42, 0.0)],
+            caps: ToolCaps::empty(),
+            brush: BrushParams::default(),
+        };
+        doc.begin_stroke(s);
+        let revision = SampleRevision { pressure: Some(0.75), ..SampleRevision::default() };
+
+        assert!(doc.revise_sample(StrokeId(1), 42, revision));
+
+        let active = doc.active.as_ref().expect("active stroke");
+        assert!((active.samples[0].pressure - 0.75).abs() < f32::EPSILON);
+        assert_eq!(active.samples[0].class, SampleClass::Committed);
+    }
+
+    #[test]
+    fn revise_sample_falls_back_to_last_committed_stroke() {
+        let mut doc = DocumentState::new();
+        let s = Stroke {
+            id: StrokeId(1),
+            samples: vec![estimated_sample_at(0.0, 0.0, 99, 0.0)],
+            caps: ToolCaps::empty(),
+            brush: BrushParams::default(),
+        };
+        Edit::AddStroke(s).apply(&mut doc).unwrap();
+        let revision = SampleRevision { pressure: Some(0.4), ..SampleRevision::default() };
+
+        assert!(doc.revise_sample(StrokeId(1), 99, revision));
+        assert!((doc.strokes[0].samples[0].pressure - 0.4).abs() < f32::EPSILON);
+        assert_eq!(doc.strokes[0].samples[0].class, SampleClass::Committed);
+    }
+
+    #[test]
+    fn revise_sample_is_no_op_when_update_index_missing() {
+        let mut doc = DocumentState::new();
+        doc.begin_stroke(stroke(1, &[(0.0, 0.0)])); // Committed sample, no Estimated
+        assert!(!doc.revise_sample(StrokeId(1), 99, SampleRevision::default()));
+    }
+
+    #[test]
+    fn revise_sample_second_revision_is_ignored() {
+        let mut doc = DocumentState::new();
+        let s = Stroke {
+            id: StrokeId(1),
+            samples: vec![estimated_sample_at(0.0, 0.0, 7, 0.0)],
+            caps: ToolCaps::empty(),
+            brush: BrushParams::default(),
+        };
+        doc.begin_stroke(s);
+        let r1 = SampleRevision { pressure: Some(0.5), ..SampleRevision::default() };
+        let r2 = SampleRevision { pressure: Some(0.9), ..SampleRevision::default() };
+
+        assert!(doc.revise_sample(StrokeId(1), 7, r1));
+        // Second revision finds no Estimated sample (was promoted to Committed).
+        assert!(!doc.revise_sample(StrokeId(1), 7, r2));
+
+        let active = doc.active.as_ref().unwrap();
+        assert!((active.samples[0].pressure - 0.5).abs() < f32::EPSILON);
     }
 }

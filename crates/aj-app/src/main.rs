@@ -4,15 +4,20 @@ mod shortcuts;
 mod ui;
 mod viewport;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use aj_core::{Point, Size, StrokeId, Vec2};
+use aj_core::{BrushParams, Point, PointerId, Size, StrokeId, Vec2};
 use aj_engine::{Command, Engine};
 use aj_render::Renderer;
+#[cfg(target_os = "macos")]
+use aj_stylus::MacTabletBackend;
+use aj_stylus::{Phase, StylusAdapter, StylusEvent};
 use anyhow::Result;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
@@ -39,8 +44,20 @@ struct App {
     chrome: Option<Chrome>,
     engine: Option<Engine>,
     cursor: Option<PhysicalPosition<f64>>,
-    active_stroke: Option<StrokeId>,
-    mouse_down: bool,
+    /// Wrapped in `Rc<RefCell<_>>` because the macOS `NSEvent` monitor
+    /// callback needs shared mutable access to emit pen events. On other
+    /// platforms the indirection is a small runtime cost for code uniformity.
+    stylus: Rc<RefCell<StylusAdapter>>,
+    /// The pointer currently driving an in-progress stroke, paired with the
+    /// stroke id so we route adapter events to the right engine command.
+    active: Option<(PointerId, StrokeId)>,
+    /// Holds the `NSEvent` monitor + focus-loss observer alive for the app's
+    /// lifetime. Dropped before the window so the monitor is removed while we
+    /// still hold a `MainThreadMarker`. Named with a leading underscore to
+    /// signal we never read it — its role is the `Drop` it performs on app
+    /// exit.
+    #[cfg(target_os = "macos")]
+    mac_tablet: Option<MacTabletBackend>,
     modifiers: ModifiersState,
     viewport: Viewport,
     dpi_scale: f64,
@@ -55,8 +72,10 @@ impl App {
             chrome: None,
             engine: None,
             cursor: None,
-            active_stroke: None,
-            mouse_down: false,
+            stylus: Rc::new(RefCell::new(StylusAdapter::new())),
+            active: None,
+            #[cfg(target_os = "macos")]
+            mac_tablet: None,
             modifiers: ModifiersState::empty(),
             viewport: Viewport::default(),
             dpi_scale: 1.0,
@@ -78,6 +97,19 @@ impl App {
         self.chrome = Some(chrome);
         self.engine = Some(Engine::spawn());
         self.window = Some(window);
+        #[cfg(target_os = "macos")]
+        {
+            // SAFETY: winit guarantees this method runs on the main thread,
+            // which is what `MainThreadMarker::new()` verifies.
+            if let Some(mtm) = aj_stylus::MainThreadMarker::new() {
+                match MacTabletBackend::install(self.stylus.clone(), mtm) {
+                    Ok(backend) => self.mac_tablet = Some(backend),
+                    Err(err) => log::warn!("macOS tablet backend install failed: {err}"),
+                }
+            } else {
+                log::warn!("MacTabletBackend: skipped install, not on main thread");
+            }
+        }
         Ok(())
     }
 
@@ -161,11 +193,6 @@ impl App {
         self.chrome
             .as_ref()
             .is_some_and(|c| c.ctx.is_pointer_over_area() || c.ctx.wants_pointer_input())
-    }
-
-    /// Convert a cursor position in physical pixels to world-space document points.
-    fn cursor_to_world(&self, pos: PhysicalPosition<f64>) -> Point {
-        self.viewport.screen_to_world(Point::new(pos.x, pos.y), self.dpi_scale)
     }
 
     /// Current inner window size in physical pixels, as a `kurbo::Size`.
@@ -288,9 +315,16 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event: ref key_event, .. } => {
                 self.on_keyboard(egui_consumed, key_event);
             }
-            WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
-            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-                self.on_left_mouse(egui_consumed, state);
+            WindowEvent::CursorMoved { position, .. } => {
+                // Keep the raw cursor for zoom-anchor use even when egui owns input;
+                // the stylus adapter is fed separately below.
+                self.cursor = Some(position);
+                self.route_input(egui_consumed, &event);
+            }
+            WindowEvent::MouseInput { .. }
+            | WindowEvent::Touch(_)
+            | WindowEvent::CursorLeft { .. } => {
+                self.route_input(egui_consumed, &event);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if !egui_consumed && !self.pointer_over_chrome() {
@@ -349,38 +383,81 @@ impl App {
         }
     }
 
-    fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        self.cursor = Some(position);
-        if self.mouse_down
-            && let Some(id) = self.active_stroke
-        {
-            let world = self.cursor_to_world(position);
-            self.send(Command::AddSample { id, point: world });
-            self.request_redraw();
+    /// Feed an input event to the stylus adapter, then dispatch resulting
+    /// stylus events to the engine. Chrome ownership (egui-consumed or pointer-
+    /// over-chrome) gates *new* strokes, but an in-progress stroke always runs
+    /// to completion — otherwise dragging the cursor across the menu bar mid-
+    /// stroke would strand the stroke forever.
+    fn route_input(&mut self, egui_consumed: bool, event: &WindowEvent) {
+        let chrome_owns_input = egui_consumed || self.pointer_over_chrome();
+        // Scope the borrow narrowly: if the NSEvent monitor fires while this
+        // borrow is held, its `try_borrow_mut` would fail and the sample
+        // would be logged and dropped. Releasing the borrow before the
+        // dispatch loop below (which runs user code) avoids that collision.
+        let events: Vec<StylusEvent> = {
+            let mut adapter = self.stylus.borrow_mut();
+            if chrome_owns_input && !adapter.is_tracking_pointer() {
+                return;
+            }
+            adapter.on_window_event(event);
+            adapter.drain().collect()
+        };
+        for stylus_event in events {
+            self.on_stylus_event(stylus_event);
         }
     }
 
-    fn on_left_mouse(&mut self, egui_consumed: bool, state: ElementState) {
-        match state {
-            ElementState::Pressed => {
-                if egui_consumed || self.pointer_over_chrome() {
-                    return;
+    fn on_stylus_event(&mut self, ev: StylusEvent) {
+        match ev {
+            StylusEvent::Sample { sample, phase, caps } => {
+                self.on_sample(sample, phase, caps);
+            }
+            StylusEvent::Revise { pointer_id, update_index, revision } => {
+                if let Some((pid, id)) = self.active
+                    && pid == pointer_id
+                {
+                    self.send(Command::ReviseSample { stroke_id: id, update_index, revision });
                 }
-                if let Some(pos) = self.cursor {
-                    let world = self.cursor_to_world(pos);
-                    let id = StrokeId::next();
-                    self.active_stroke = Some(id);
-                    self.mouse_down = true;
-                    self.send(Command::BeginStroke { id, point: world });
+            }
+            // `#[non_exhaustive]`: future variants (predicted samples, bulk
+            // revisions) land without breaking this match.
+            _ => {}
+        }
+    }
+
+    fn on_sample(&mut self, mut sample: aj_core::Sample, phase: Phase, caps: aj_core::ToolCaps) {
+        let world = self.viewport.screen_to_world(sample.position, self.dpi_scale);
+        sample.position = world;
+        let pointer_id = sample.pointer_id;
+
+        match phase {
+            Phase::Down => {
+                let id = StrokeId::next();
+                self.active = Some((pointer_id, id));
+                self.send(Command::BeginStroke { id, sample, caps, brush: BrushParams::default() });
+                self.request_redraw();
+            }
+            Phase::Move => {
+                if let Some((pid, id)) = self.active
+                    && pid == pointer_id
+                {
+                    self.send(Command::AddSample { id, sample });
                     self.request_redraw();
                 }
             }
-            ElementState::Released => {
-                if let Some(id) = self.active_stroke.take() {
+            Phase::Up | Phase::Cancel => {
+                if let Some((pid, id)) = self.active
+                    && pid == pointer_id
+                {
                     self.send(Command::EndStroke { id });
+                    self.active = None;
+                    self.request_redraw();
                 }
-                self.mouse_down = false;
-                self.request_redraw();
+            }
+            Phase::Hover => {
+                // Not emitted in Milestone 1 (mouse-without-button produces nothing,
+                // no pen-proximity backends yet). When a pen backend lands, this
+                // arm can drive cursor/brush-preview UI without starting a stroke.
             }
         }
     }

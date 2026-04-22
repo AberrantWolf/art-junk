@@ -4,6 +4,7 @@
 sequenceDiagram
   participant UI as winit event loop (aj-app)
   participant Chr as egui chrome (aj-app)
+  participant Sty as StylusAdapter (aj-stylus)
   participant Act as ActionTable (aj-app)
   participant VP as Viewport (aj-app)
   participant Eng as aj-engine actor thread
@@ -15,8 +16,11 @@ sequenceDiagram
   UI->>Chr: on_window_event(event)
   UI->>Act: key event (if egui didn't consume)
   Act->>Eng: Command::Undo / Command::Redo
-  UI->>VP: screen_to_world(cursor_physical_px) → world_pt
-  UI->>Eng: Command::BeginStroke / AddSample / EndStroke (world-space pt)
+  UI->>Sty: on_window_event(event) (unless chrome owns pointer & no active stroke)
+  Note over Sty: on macOS an NSEvent local monitor ALSO pushes<br/>richer pen samples (pressure/tilt/twist) into Sty<br/>before winit dispatches; Sty.active_pen_pointer<br/>then suppresses the duplicate mouse sample.
+  Sty-->>UI: drain() → StylusEvent::Sample { sample, phase, caps }<br/>   or StylusEvent::Revise { pointer_id, update_index, revision }
+  UI->>VP: screen_to_world(sample.position) → world-space sample
+  UI->>Eng: Command::BeginStroke { id, sample, caps, brush } / AddSample / EndStroke<br/>   or Command::ReviseSample { stroke_id, update_index, revision }
   UI->>Eng: Command::SetPageSize / SetShowBounds / SetClipToBounds
   UI->>VP: mutate on MouseWheel / PinchGesture / ViewAction
   Eng->>His: record inverse on EndStroke; pop / push on Undo / Redo
@@ -30,6 +34,61 @@ sequenceDiagram
 
 ## Notes
 
+- `StylusAdapter` is the single translation point from platform events to the
+  app's internal `StylusEvent` stream. It owns `PointerId` allocation, mouse /
+  touch / pen state, and hosts platform backends through a `pub(crate)` seam
+  (`handle_mac_raw` / `handle_mac_proximity` / `on_focus_lost`). macOS pen data
+  arrives via the `MacTabletBackend` in `aj-stylus::macos_tablet`, which
+  installs an `NSEvent` local monitor and an `NSApplicationDidResignActive`
+  observer; future iOS / Windows / Android backends will plug into the same
+  seam. Adapter output is screen-space — world-space conversion stays in
+  `aj-app` because the viewport lives there.
+- **Pen/mouse deduplication on macOS**: when a Wacom-style tablet is in use,
+  macOS delivers pen input both as `NSEventTypeTabletPoint` (native) *and* as
+  regular mouse events with `subtype == .tabletPoint`. The `NSEvent` local
+  monitor runs before `sendEvent:` dispatches the event to the window, so our
+  richer pen sample is queued first and `active_pen_pointer` is set. Winit's
+  subsequent dispatch lands the duplicate mouse event in `on_window_event`,
+  which sees the flag and drops it. Egui still receives the winit mouse
+  stream, so menu interaction via pen continues to work.
+- **Estimated → Revise → Committed**: a pen-down on macOS often reports
+  under-settled pressure on the first sample. The adapter emits that Down
+  sample with `SampleClass::Estimated { update_index }` and records the
+  pending index. When the next platform sample arrives (native
+  `NSTabletPoint` or a follow-up `LeftMouseDragged`), the adapter emits a
+  `StylusEvent::Revise` carrying the refined fields. The engine's
+  `Command::ReviseSample` mutates the earlier sample in-place (active stroke
+  first, last-committed stroke as a race-rescue) and promotes its class to
+  `Committed`. No `Edit` is produced — revisions are pre-commit; by the time
+  `EndStroke` lands, history stores the final values.
+- **Focus-loss cancel**: observing `NSApplicationDidResignActive`, the backend
+  calls `adapter.on_focus_lost()` which emits a `Cancel` phase for every
+  active pointer (mouse, pen, touch). This prevents half-drawn strokes from
+  being stranded when the user Cmd-Tabs mid-drag — macOS would route the
+  eventual mouse-up to the new key app, and without the synthetic cancel our
+  stroke would never terminate.
+- **Borrow discipline**: the adapter is held in `Rc<RefCell<_>>` so the
+  NSEvent monitor callback (running on the main thread, same as winit's
+  event loop) can mutate it. The app's `route_input` borrows `stylus` in a
+  narrow scope so the monitor's `try_borrow_mut` never collides; on the
+  unlikely collision, the sample is logged and dropped rather than panicking.
+- Chrome-owned input gating: if egui consumes an event or the pointer sits over
+  chrome, `aj-app` declines to forward the event to the adapter **unless a
+  stroke is already in progress** (`adapter.is_tracking_pointer()`). This
+  preserves today's invariant that a stroke begun on the canvas runs to
+  completion even if the cursor crosses the menu bar mid-drag.
+- `Sample` is mandatory-fields-with-defaults for things every platform can
+  supply (position, timestamp, pressure, tool, buttons, pointer_id) and
+  `Option<T>` for fields that are genuinely platform-dependent (tilt, twist,
+  tangential pressure, distance, contact size). The per-stroke `ToolCaps`
+  bitflags let UI hide pressure-sensitive controls before the first sample
+  arrives, avoiding the "0 vs missing" ambiguity that plagues Web and Windows
+  sentinel conventions.
+- `SampleClass` carries `Committed | Predicted | Estimated { update_index }`
+  from day one. No backend produces `Predicted` or `Estimated` samples in
+  Milestone 1, but iOS PencilKit's late-arriving estimation-resolution updates
+  can be landed later by walking the active stroke and replacing samples
+  matching `update_index` — no schema migration needed.
 - UI never mutates `DocumentState` directly — every change is a `Command` on a channel.
 - The engine drains commands (recv + try_recv) and publishes a single `AppSnapshot` per
   batch, so burst input does not cause snapshot thrash.
@@ -37,8 +96,12 @@ sequenceDiagram
   with a `HistoryStatus { can_undo, can_redo }` so UI can enable/disable menu entries
   without reaching into engine internals. Renderer ignores `history`; UI reads
   `scene.page` for toggle checkmarks but ignores `scene.strokes`.
-- `SceneSnapshot` is `{ page: Page, strokes: Vec<Stroke> }`. Page state rides the
-  same single ArcSwap publication as strokes so the renderer reads both from a
+- `SceneSnapshot` is `{ page: Page, strokes: Vec<Stroke> }`. A `Stroke` is
+  `{ id, samples: Vec<Sample>, caps: ToolCaps, brush: BrushParams }`; the
+  renderer currently reads only `sample.position`, but `pressure` / `tilt` /
+  `brush` are carried end-to-end so variable-width rendering (a later
+  milestone) doesn't need a data-shape change. Page state rides the same
+  single ArcSwap publication as strokes so the renderer reads both from a
   consistent view — no parallel channel for page mutations.
 - Page mutations (`SetPageSize` / `SetShowBounds` / `SetClipToBounds`) are Commands
   but not `Edit`s: they bypass the history stack (non-undoable in v1, TODO noted).
