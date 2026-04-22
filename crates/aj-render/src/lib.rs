@@ -65,10 +65,17 @@ impl Renderer {
             scene.pop_layer();
         }
         if page.show_bounds {
-            // TODO(border-screen-weight): border currently scales with zoom (looks
-            // thinner far-out, thicker zoomed-in). M3 polish is to render it at
-            // constant screen pixels so it's always legible as page chrome.
-            let border_style = KStroke::new(1.0);
+            // Border is UI chrome, not content — it stays at a constant physical
+            // pixel width regardless of zoom. We divide the desired screen-px width
+            // by the effective uniform scale of `world_to_screen` so that after the
+            // affine is applied, the stroked line lands at ~BORDER_PX physical px.
+            // For a pure scale+translate affine `|det| = scale^2`, so `sqrt(|det|)`
+            // recovers the scale; this remains the right formula if non-uniform
+            // scale or rotation is ever added (it gives the geometric-mean scale).
+            const BORDER_PX: f64 = 1.5;
+            let scale = world_to_screen.determinant().abs().sqrt();
+            let stroke_width = if scale > 0.0 { BORDER_PX / scale } else { BORDER_PX };
+            let border_style = KStroke::new(stroke_width);
             let border_color = Color::rgb8(80, 90, 100);
             scene.stroke(&border_style, world_to_screen, border_color, None, &page_rect);
         }

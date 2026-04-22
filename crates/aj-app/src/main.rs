@@ -275,12 +275,7 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => {
-                if let Some(gpu) = self.gpu.as_mut() {
-                    gpu.resize(size);
-                }
-                self.request_redraw();
-            }
+            WindowEvent::Resized(size) => self.on_resized(size),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.dpi_scale = scale_factor;
                 self.request_redraw();
@@ -288,42 +283,79 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
             }
-            WindowEvent::KeyboardInput { event: key_event, .. } => {
-                if egui_consumed || key_event.state != ElementState::Pressed || key_event.repeat {
-                    return;
-                }
-                if let Some(action) = match_action(&key_event.logical_key, self.modifiers)
-                    && let Some(engine) = self.engine.as_ref()
-                {
-                    let snap = engine.snapshot();
-                    if action.enabled(snap.history) {
-                        action.dispatch(engine);
-                        self.request_redraw();
-                    }
-                    return;
-                }
-                if let Some(view_action) = match_view_action(&key_event.logical_key, self.modifiers)
-                {
-                    let page =
-                        self.engine.as_ref().map(|e| e.snapshot().scene.page).unwrap_or_default();
-                    self.apply_view_action(view_action, page);
+            WindowEvent::KeyboardInput { event: ref key_event, .. } => {
+                self.on_keyboard(egui_consumed, key_event);
+            }
+            WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
+            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                self.on_left_mouse(egui_consumed, state);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if !egui_consumed && !self.pointer_over_chrome() {
+                    self.handle_wheel(delta);
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = Some(position);
-                if self.mouse_down
-                    && let Some(id) = self.active_stroke
-                {
-                    let world = self.cursor_to_world(position);
-                    self.send(Command::AddSample { id, point: world });
-                    self.request_redraw();
+            WindowEvent::PinchGesture { delta, .. } => {
+                // delta may be NaN per winit docs — guard before it propagates into
+                // translate_pt and silently breaks the viewport.
+                if !egui_consumed && !self.pointer_over_chrome() && delta.is_finite() {
+                    // macOS reports small per-tick deltas (~0.01); `1 + delta` is the
+                    // natural zoom factor (positive = pinch-out = zoom in).
+                    self.zoom_by(1.0 + delta);
                 }
             }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Left,
-                ..
-            } => {
+            WindowEvent::RedrawRequested => {
+                if let Err(err) = self.render() {
+                    log::error!("render: {err:?}");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl App {
+    fn on_resized(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.resize(size);
+        }
+        self.request_redraw();
+    }
+
+    fn on_keyboard(&mut self, egui_consumed: bool, key_event: &winit::event::KeyEvent) {
+        if egui_consumed || key_event.state != ElementState::Pressed || key_event.repeat {
+            return;
+        }
+        if let Some(action) = match_action(&key_event.logical_key, self.modifiers)
+            && let Some(engine) = self.engine.as_ref()
+        {
+            let snap = engine.snapshot();
+            if action.enabled(snap.history) {
+                action.dispatch(engine);
+                self.request_redraw();
+            }
+            return;
+        }
+        if let Some(view_action) = match_view_action(&key_event.logical_key, self.modifiers) {
+            let page = self.engine.as_ref().map(|e| e.snapshot().scene.page).unwrap_or_default();
+            self.apply_view_action(view_action, page);
+        }
+    }
+
+    fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+        self.cursor = Some(position);
+        if self.mouse_down
+            && let Some(id) = self.active_stroke
+        {
+            let world = self.cursor_to_world(position);
+            self.send(Command::AddSample { id, point: world });
+            self.request_redraw();
+        }
+    }
+
+    fn on_left_mouse(&mut self, egui_consumed: bool, state: ElementState) {
+        match state {
+            ElementState::Pressed => {
                 if egui_consumed || self.pointer_over_chrome() {
                     return;
                 }
@@ -336,29 +368,13 @@ impl ApplicationHandler for App {
                     self.request_redraw();
                 }
             }
-            WindowEvent::MouseInput {
-                state: ElementState::Released,
-                button: MouseButton::Left,
-                ..
-            } => {
+            ElementState::Released => {
                 if let Some(id) = self.active_stroke.take() {
                     self.send(Command::EndStroke { id });
                 }
                 self.mouse_down = false;
                 self.request_redraw();
             }
-            WindowEvent::MouseWheel { delta, .. } => {
-                if egui_consumed || self.pointer_over_chrome() {
-                    return;
-                }
-                self.handle_wheel(delta);
-            }
-            WindowEvent::RedrawRequested => {
-                if let Err(err) = self.render() {
-                    log::error!("render: {err:?}");
-                }
-            }
-            _ => {}
         }
     }
 }
