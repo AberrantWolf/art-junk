@@ -1,5 +1,6 @@
 mod compose;
 mod gpu;
+mod shortcuts;
 mod ui;
 mod viewport;
 
@@ -18,7 +19,8 @@ use winit::window::{Window, WindowId};
 
 use crate::compose::Chrome;
 use crate::gpu::GpuState;
-use crate::ui::{Action, ViewAction, draw_menu_bar, match_action, match_view_action};
+use crate::shortcuts::AppAction;
+use crate::ui::{Action, ViewAction, draw_menu_bar};
 use crate::viewport::{Viewport, ZOOM_STEP};
 
 /// Each "line" of scroll-wheel movement represents this many physical pixels when
@@ -326,19 +328,24 @@ impl App {
         if egui_consumed || key_event.state != ElementState::Pressed || key_event.repeat {
             return;
         }
-        if let Some(action) = match_action(&key_event.logical_key, self.modifiers)
-            && let Some(engine) = self.engine.as_ref()
-        {
-            let snap = engine.snapshot();
-            if action.enabled(snap.history) {
-                action.dispatch(engine);
-                self.request_redraw();
-            }
+        let Some(app_action) = shortcuts::resolve(&key_event.logical_key, self.modifiers) else {
             return;
-        }
-        if let Some(view_action) = match_view_action(&key_event.logical_key, self.modifiers) {
-            let page = self.engine.as_ref().map(|e| e.snapshot().scene.page).unwrap_or_default();
-            self.apply_view_action(view_action, page);
+        };
+        match app_action {
+            AppAction::Edit(action) => {
+                if let Some(engine) = self.engine.as_ref() {
+                    let snap = engine.snapshot();
+                    if action.enabled(snap.history) {
+                        action.dispatch(engine);
+                        self.request_redraw();
+                    }
+                }
+            }
+            AppAction::View(view_action) => {
+                let page =
+                    self.engine.as_ref().map(|e| e.snapshot().scene.page).unwrap_or_default();
+                self.apply_view_action(view_action, page);
+            }
         }
     }
 
