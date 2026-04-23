@@ -21,6 +21,7 @@ pub use macos_tablet::{MacTabletBackend, MacTabletInstallError};
 pub use objc2::MainThreadMarker;
 
 use aj_core::{PointerId, Sample, SampleRevision, ToolCaps};
+use kurbo::Point;
 
 /// Which transition a `StylusEvent::Sample` represents. Lives here rather than
 /// on `Sample` so stored strokes (which are always mid-stroke moves) don't
@@ -34,13 +35,38 @@ pub enum Phase {
     Cancel,
 }
 
+/// Off-contact pose reported by iPadOS Apple Pencil hover and Pencil Pro squeeze.
+/// All angles in radians, matching Apple's native units. `z_offset` / `roll_rad`
+/// are `Option` because they are gated on newer hardware or iOS versions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HoverPose {
+    pub position: Point,
+    pub z_offset: Option<f32>,
+    pub altitude_rad: f32,
+    pub azimuth_rad: f32,
+    pub roll_rad: Option<f32>,
+}
+
+/// Pencil-side interaction events that don't ride on a `UITouch` — Apple
+/// Pencil 2 double-tap and Pencil Pro squeeze. iOS-only today; variant kept
+/// platform-agnostic so future stylus hardware with side gestures can reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PencilInteractionKind {
+    Tap,
+    SqueezeBegan,
+    SqueezeChanged,
+    SqueezeEnded,
+    SqueezeCancelled,
+}
+
 /// Adapter output. The `sample` field on the `Sample` variant is in screen-space
 /// physical pixels — the app is responsible for viewport conversion before
 /// passing it to the engine.
 ///
-/// Marked `#[non_exhaustive]` so future variants (e.g. `Predicted`, bulk
-/// revisions for iOS Pencil, hover with proximity distance) can land
-/// without breaking exhaustive matches in the app.
+/// Marked `#[non_exhaustive]` so future variants (e.g. bulk revisions,
+/// hover with proximity distance) can land without breaking exhaustive matches
+/// in the app.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum StylusEvent {
@@ -57,5 +83,12 @@ pub enum StylusEvent {
         pointer_id: PointerId,
         update_index: u64,
         revision: SampleRevision,
+    },
+    /// Side-gesture event from a Pencil (tap, squeeze). Not tied to a
+    /// `StylusEvent::Sample` — Pencil delivers these independently of
+    /// touch streams.
+    PencilInteraction {
+        kind: PencilInteractionKind,
+        hover_pose: Option<HoverPose>,
     },
 }

@@ -13,10 +13,16 @@
 //!   pointer id for each physical stylus, plus `active_pen_pointer` which
 //!   gates the winit mouse path so a pen-driven mouse event doesn't produce
 //!   a duplicate `StylusEvent::Sample`,
-//! - `pending_estimated`, the `update_index` of the Down sample that's awaiting
-//!   pressure refinement from the next platform sample,
-//! - a mac-epoch offset so `NSEvent.timestamp` (seconds since system boot)
-//!   translates into this adapter's `Duration`-since-`self.epoch` timeline.
+//! - `pending_estimated`, keyed by the `update_index` that was emitted with an
+//!   `Estimated` sample, mapping to the `PointerId` whose stroke carries it.
+//!   Keyed on `update_index` (not pointer) so iOS Pencil's out-of-order
+//!   `touchesEstimatedPropertiesUpdated:` can resolve a specific estimate
+//!   directly; mac looks up by pointer via `take_pending_for_pointer`.
+//! - a per-platform-clock `PlatformTimestampAnchor` so native timestamps
+//!   (`NSEvent.timestamp` seconds since boot, QPC ticks on Windows,
+//!   `DOMHighResTimeStamp` ms on Web, etc.) translate into this adapter's
+//!   `Duration`-since-`self.epoch` timeline. Each backend owns its own anchor
+//!   — clocks must not mix.
 //!
 //! The `drain` iterator (rather than returning from each handler) exists so
 //! one platform event can fan into multiple `StylusEvent`s: on macOS, the
@@ -43,9 +49,12 @@ pub struct StylusAdapter {
     queue: VecDeque<StylusEvent>,
     pens: HashMap<u32, PenState>,
     active_pen_pointer: Option<PointerId>,
-    pending_estimated: HashMap<PointerId, u64>,
+    /// Pending estimated samples awaiting refinement, keyed by the
+    /// `update_index` emitted with the original `SampleClass::Estimated`.
+    /// Value is the `PointerId` whose stroke owns the estimate.
+    pending_estimated: HashMap<u64, PointerId>,
     next_update_index: u64,
-    mac_epoch: Option<MacEpoch>,
+    mac_anchor: Option<PlatformTimestampAnchor>,
 }
 
 /// Per-stylus state, keyed by `NSEvent` `deviceID`. Learned from proximity
@@ -59,14 +68,36 @@ pub(crate) struct PenState {
     pub(crate) last_position: Option<Point>,
 }
 
-/// Offset used to translate `NSEvent` hardware timestamps (f64 seconds since
-/// system boot) into `Duration`s measured from `StylusAdapter::epoch`.
-/// Populated lazily on the first `NSEvent`-driven sample so we never need to
-/// query `ProcessInfo.systemUptime` at adapter construction.
+/// Translates a platform's monotonic clock (in seconds since some
+/// platform-specific epoch — system boot for macOS/Android `CLOCK_MONOTONIC`,
+/// QPC-reference on Windows, navigation-start for Web) into a `Duration`
+/// measured from `StylusAdapter::epoch`.
+///
+/// Each platform keeps its own anchor on the adapter (`mac_anchor`,
+/// `windows_anchor`, …) because clocks must not be mixed: the adapter sees
+/// one unified timeline out, but each backend's first sample anchors its own
+/// platform timeline.
 #[derive(Debug, Clone, Copy)]
-struct MacEpoch {
-    first_nsevent_secs: f64,
+pub(crate) struct PlatformTimestampAnchor {
+    first_platform_secs: f64,
     adapter_duration_at_first: Duration,
+}
+
+impl PlatformTimestampAnchor {
+    /// Translate `platform_secs` to adapter-timeline `Duration`, anchoring on
+    /// the first call if `slot` is empty. `adapter_epoch` is `StylusAdapter::epoch`.
+    pub(crate) fn translate_or_anchor(
+        slot: &mut Option<Self>,
+        platform_secs: f64,
+        adapter_epoch: Instant,
+    ) -> Duration {
+        let anchor = *slot.get_or_insert_with(|| Self {
+            first_platform_secs: platform_secs,
+            adapter_duration_at_first: Instant::now().saturating_duration_since(adapter_epoch),
+        });
+        let delta_secs = (platform_secs - anchor.first_platform_secs).max(0.0);
+        anchor.adapter_duration_at_first + Duration::from_secs_f64(delta_secs)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,7 +172,7 @@ impl StylusAdapter {
             active_pen_pointer: None,
             pending_estimated: HashMap::new(),
             next_update_index: 1,
-            mac_epoch: None,
+            mac_anchor: None,
         }
     }
 
@@ -219,45 +250,49 @@ impl StylusAdapter {
     pub(crate) fn handle_mac_raw(&mut self, raw: MacTabletRawSample) {
         let ts = self.translate_mac_timestamp(raw.timestamp_secs);
 
-        // Synthesize an optimistic PenState if we haven't seen a proximity
-        // event for this device yet (e.g. app launched with pen hovering).
-        let pen = self.pens.entry(raw.device_id).or_insert_with(|| PenState {
-            active_pointer_id: None,
-            caps: OPTIMISTIC_PEN_CAPS,
-            tool: raw.pointing_device_type,
-            unique_id: None,
-            last_position: None,
-        });
-        pen.last_position = Some(raw.position_physical_px);
+        // Snapshot pen state in a narrow scope so the `&mut self.pens` borrow
+        // is released before we call helpers like `take_pending_for_pointer`
+        // that need `&mut self`.
+        let (caps, tool, active_pid) = {
+            let pen = self.pens.entry(raw.device_id).or_insert_with(|| PenState {
+                active_pointer_id: None,
+                caps: OPTIMISTIC_PEN_CAPS,
+                tool: raw.pointing_device_type,
+                unique_id: None,
+                last_position: None,
+            });
+            pen.last_position = Some(raw.position_physical_px);
+            (pen.caps, pen.tool, pen.active_pointer_id)
+        };
 
         match raw.source_phase {
             MacTabletPhase::Down => {
                 let pid = alloc_pointer_id(&mut self.next_pointer_id);
-                pen.active_pointer_id = Some(pid);
+                if let Some(pen) = self.pens.get_mut(&raw.device_id) {
+                    pen.active_pointer_id = Some(pid);
+                }
                 let update_index = self.next_update_index;
                 self.next_update_index = self.next_update_index.wrapping_add(1);
 
-                let caps = pen.caps;
-                let tool = pen.tool;
                 let mut sample = build_pen_sample(&raw, ts, pid, tool);
                 sample.class = SampleClass::Estimated { update_index };
-                self.pending_estimated.insert(pid, update_index);
+                self.pending_estimated.insert(update_index, pid);
                 self.active_pen_pointer = Some(pid);
                 self.queue.push_back(StylusEvent::Sample { sample, phase: Phase::Down, caps });
             }
             MacTabletPhase::Move | MacTabletPhase::Up => {
-                let Some(pid) = pen.active_pointer_id else {
+                let Some(pid) = active_pid else {
                     // Move or Up without a preceding Down for this pen; drop.
                     // Can happen if the adapter was constructed after the
                     // pen was already pressed (very unlikely in practice).
                     return;
                 };
-                let caps = pen.caps;
-                let tool = pen.tool;
 
                 // If a revision is pending, refine the earlier Estimated sample
-                // with whatever fresher axis data this event carries.
-                if let Some(update_index) = self.pending_estimated.remove(&pid) {
+                // with whatever fresher axis data this event carries. Mac emits
+                // at most one pending estimate per stroke; the iteration stays
+                // correct for platforms that emit several.
+                for update_index in self.take_pending_for_pointer(pid) {
                     let revision = SampleRevision {
                         pressure: Some(raw.pressure),
                         tilt: Some(raw.tilt),
@@ -294,7 +329,9 @@ impl StylusAdapter {
                 self.queue.push_back(StylusEvent::Sample { sample, phase, caps });
 
                 if matches!(raw.source_phase, MacTabletPhase::Up) {
-                    pen.active_pointer_id = None;
+                    if let Some(pen) = self.pens.get_mut(&raw.device_id) {
+                        pen.active_pointer_id = None;
+                    }
                     if self.active_pen_pointer == Some(pid) {
                         self.active_pen_pointer = None;
                     }
@@ -334,7 +371,7 @@ impl StylusAdapter {
             let caps = pen.caps;
             sample.tool = pen.tool;
             self.queue.push_back(StylusEvent::Sample { sample, phase: Phase::Cancel, caps });
-            self.pending_estimated.remove(&pid);
+            let _ = self.take_pending_for_pointer(pid);
             if self.active_pen_pointer == Some(pid) {
                 self.active_pen_pointer = None;
             }
@@ -367,7 +404,7 @@ impl StylusAdapter {
                         phase: Phase::Cancel,
                         caps,
                     });
-                    self.pending_estimated.remove(&active_pid);
+                    let _ = self.take_pending_for_pointer(active_pid);
                     break;
                 }
             }
@@ -397,12 +434,20 @@ impl StylusAdapter {
     }
 
     fn translate_mac_timestamp(&mut self, nsevent_secs: f64) -> Duration {
-        let epoch = *self.mac_epoch.get_or_insert_with(|| MacEpoch {
-            first_nsevent_secs: nsevent_secs,
-            adapter_duration_at_first: Instant::now().saturating_duration_since(self.epoch),
-        });
-        let delta_secs = (nsevent_secs - epoch.first_nsevent_secs).max(0.0);
-        epoch.adapter_duration_at_first + Duration::from_secs_f64(delta_secs)
+        PlatformTimestampAnchor::translate_or_anchor(&mut self.mac_anchor, nsevent_secs, self.epoch)
+    }
+
+    /// Remove and return every pending-estimate `update_index` belonging to
+    /// `pid`. Mac inserts at most one entry per stroke (typical return: 0 or 1
+    /// elements); iOS may insert multiple per stroke (one per estimated axis).
+    /// Used wherever a stroke terminates or advances past its Estimated Down.
+    fn take_pending_for_pointer(&mut self, pid: PointerId) -> Vec<u64> {
+        let keys: Vec<u64> =
+            self.pending_estimated.iter().filter_map(|(k, v)| (*v == pid).then_some(*k)).collect();
+        for k in &keys {
+            self.pending_estimated.remove(k);
+        }
+        keys
     }
 
     fn timestamp(&self) -> Duration {
