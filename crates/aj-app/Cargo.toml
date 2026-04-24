@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "art-junk drawing application binary."
+publish = false
 
 [lints]
 workspace = true

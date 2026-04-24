@@ -1,4 +1,4 @@
-//! X11 / XInput2 tablet-input backend. Opens a secondary `x11rb` connection
+//! X11 / `XInput2` tablet-input backend. Opens a secondary `x11rb` connection
 //! (sharing winit's is impossible — x11rb owns the protocol parser state),
 //! enumerates stylus/eraser/cursor slave devices, caches per-device valuator
 //! metadata, subscribes to XI2 motion/button/enter/leave/hierarchy events on
@@ -108,7 +108,7 @@ impl X11TabletBackend {
         let pump = std::thread::Builder::new()
             .name("stylus-junk-x11-pump".into())
             .spawn(move || {
-                pump_loop(pump_conn, pump_running, atoms, devices, adapter, window);
+                pump_loop(&pump_conn, &pump_running, atoms, devices, &adapter, window);
             })
             .map_err(|e| X11TabletInstallError::Protocol(e.to_string()))?;
 
@@ -124,7 +124,12 @@ impl Drop for X11TabletBackend {
 
 fn extract_window_id(handle: &RawWindowHandle) -> Result<Window, X11TabletInstallError> {
     match handle {
-        RawWindowHandle::Xlib(XlibWindowHandle { window, .. }) => Ok(*window as Window),
+        // Xlib's `Window` is `c_ulong` (u64 on 64-bit Linux); X11 XIDs are
+        // 29-bit in practice so narrowing to u32 is safe, but we use
+        // `try_from` to avoid a silent truncation lint.
+        RawWindowHandle::Xlib(XlibWindowHandle { window, .. }) => {
+            u32::try_from(*window).map_err(|_| X11TabletInstallError::NotX11Window)
+        }
         RawWindowHandle::Xcb(XcbWindowHandle { window, .. }) => Ok(window.get()),
         _ => Err(X11TabletInstallError::NotX11Window),
     }
@@ -134,6 +139,10 @@ fn extract_window_id(handle: &RawWindowHandle) -> Result<Window, X11TabletInstal
 /// and stable for the connection's lifetime, so we intern once at startup and
 /// then equality-compare by `Atom` against `DeviceClassDataValuator.label`.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "field names mirror X11 valuator atom labels (\"Abs X\", \"Abs Y\", ...)"
+)]
 struct AxisAtoms {
     abs_x: Atom,
     abs_y: Atom,
@@ -215,8 +224,9 @@ struct StylusDevice {
     /// True once we've seen any proximity or synthesized it from an Enter
     /// event. Used to suppress re-synthesizing on every subsequent motion.
     in_proximity: bool,
-    /// True if this device has ever delivered a real XI_ProximityIn/Out.
-    /// Tracked so backends know whether to synthesize from Enter/Leave.
+    /// True if this device has ever delivered a real `XI_ProximityIn` or
+    /// `XI_ProximityOut`. Tracked so backends know whether to synthesize from
+    /// Enter/Leave.
     has_real_proximity: bool,
 }
 
@@ -394,11 +404,11 @@ fn caps_for_device(axes: &DeviceAxes) -> ToolCaps {
 }
 
 fn pump_loop(
-    conn: Arc<RustConnection>,
-    running: Arc<AtomicBool>,
+    conn: &Arc<RustConnection>,
+    running: &Arc<AtomicBool>,
     atoms: AxisAtoms,
     mut devices: DeviceCache,
-    adapter: Arc<Mutex<StylusAdapter>>,
+    adapter: &Arc<Mutex<StylusAdapter>>,
     window: Window,
 ) {
     while running.load(Ordering::Acquire) {
@@ -412,7 +422,7 @@ fn pump_loop(
         if !running.load(Ordering::Acquire) {
             return;
         }
-        handle_event(event, &conn, &atoms, &mut devices, &adapter, window);
+        handle_event(event, conn, &atoms, &mut devices, adapter, window);
     }
 }
 
@@ -441,16 +451,18 @@ fn handle_event(
             synthesize_proximity(e.sourceid, false, devices, adapter);
         }
         Event::XinputProximityIn(e) => {
-            if let Some(dev) = devices.by_id.get_mut(&(e.device_id as DeviceId)) {
+            let id = DeviceId::from(e.device_id);
+            if let Some(dev) = devices.by_id.get_mut(&id) {
                 dev.has_real_proximity = true;
             }
-            real_proximity(e.device_id as DeviceId, true, devices, adapter);
+            real_proximity(id, true, devices, adapter);
         }
         Event::XinputProximityOut(e) => {
-            if let Some(dev) = devices.by_id.get_mut(&(e.device_id as DeviceId)) {
+            let id = DeviceId::from(e.device_id);
+            if let Some(dev) = devices.by_id.get_mut(&id) {
                 dev.has_real_proximity = true;
             }
-            real_proximity(e.device_id as DeviceId, false, devices, adapter);
+            real_proximity(id, false, devices, adapter);
         }
         Event::XinputHierarchy(e) => {
             // Hotplug of tablet hardware or driver restart. Re-enumerate and
@@ -544,7 +556,9 @@ fn merge_axis_values(device: &mut StylusDevice, mask_words: &[u32], values: &[Fp
             break;
         };
         let raw = fp3232_to_f64(*raw);
-        let idx = bit as u16;
+        // Valuator indices are always small; if `bit` ever exceeds u16 we
+        // can't index into any axis anyway, so bail out of the walk.
+        let Ok(idx) = u16::try_from(bit) else { break };
         if let Some(a) = device.axes.x
             && a.index == idx
         {
@@ -583,39 +597,34 @@ fn merge_axis_values(device: &mut StylusDevice, mask_words: &[u32], values: &[Fp
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "normalized [0,1] and bounded-degree values fit f32 without meaningful loss"
+)]
 fn build_sample(device: &StylusDevice, phase: X11TabletPhase) -> X11RawSample {
     let position = Point::new(device.last.x, device.last.y);
     let pressure = device
         .axes
         .pressure
-        .map(|a| ranged_normalize(device.last.pressure, a.min, a.max) as f32)
-        .unwrap_or(0.5);
+        .map_or(0.5, |a| ranged_normalize(device.last.pressure, a.min, a.max) as f32);
     let tilt = compute_tilt(device);
-    let twist_deg = device
-        .axes
-        .wheel
-        .map(|a| {
-            // Linear map wheel range to -180..=180 degrees of twist.
-            let span = a.max - a.min;
-            if span.abs() < f64::EPSILON {
-                0.0
-            } else {
-                (((device.last.wheel - a.min) / span) * 360.0 - 180.0) as f32
-            }
-        })
-        .unwrap_or(0.0);
-    let tangential_pressure = device
-        .axes
-        .z
-        .map(|a| {
-            let span = a.max - a.min;
-            if span.abs() < f64::EPSILON {
-                0.0
-            } else {
-                (((device.last.z - a.min) / span) * 2.0 - 1.0) as f32
-            }
-        })
-        .unwrap_or(0.0);
+    let twist_deg = device.axes.wheel.map_or(0.0, |a| {
+        // Linear map wheel range to -180..=180 degrees of twist.
+        let span = a.max - a.min;
+        if span.abs() < f64::EPSILON {
+            0.0
+        } else {
+            (((device.last.wheel - a.min) / span) * 360.0 - 180.0) as f32
+        }
+    });
+    let tangential_pressure = device.axes.z.map_or(0.0, |a| {
+        let span = a.max - a.min;
+        if span.abs() < f64::EPSILON {
+            0.0
+        } else {
+            (((device.last.z - a.min) / span) * 2.0 - 1.0) as f32
+        }
+    });
 
     X11RawSample {
         position_physical_px: position,
@@ -630,6 +639,10 @@ fn build_sample(device: &StylusDevice, phase: X11TabletPhase) -> X11RawSample {
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "tilt values are bounded to -90..=90 degrees and fit f32 without meaningful loss"
+)]
 fn compute_tilt(device: &StylusDevice) -> Tilt {
     let scale = |axis: Option<AxisRef>, raw: f64| -> f32 {
         let Some(a) = axis else {
