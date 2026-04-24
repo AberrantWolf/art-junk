@@ -14,13 +14,18 @@
 //!   segment. Splining pressure would manufacture data we don't have — the
 //!   only ground truth is the two endpoint pressures.
 //! - **Round caps** emitted as semicircle fans at the stroke's first and last
-//!   sample positions, perpendicular to the local tangent. Fan vertex count
-//!   scales with cap radius in physical pixels, bounded `[CAP_VERTEX_MIN,
-//!   CAP_VERTEX_MAX]`.
+//!   sample positions, perpendicular to the local tangent, plus additional
+//!   cusp caps wherever the offset rail would fold (pen-lift reversals, sharp
+//!   hairpins). Fan vertex count scales with cap radius in physical pixels,
+//!   bounded `[CAP_VERTEX_MIN, CAP_VERTEX_MAX]`.
+//! - **Cusp splitting** at points where `|κ|·half_width ≥ CUSP_THRESHOLD`.
+//!   The stroke is emitted as a series of sub-segment ribbons joined by round
+//!   caps; their union approximates the Minkowski-swept-disk silhouette that
+//!   a bristle brush actually traces.
 //!
 //! The returned `BezPath` is in world space and expected to be filled with
-//! `Fill::NonZero`. Caps are emitted as separate sub-paths; the non-zero
-//! winding rule handles the union with the ribbon polygon.
+//! `Fill::NonZero`. Sub-segment ribbons and caps are emitted as separate
+//! sub-paths; the non-zero winding rule handles the union.
 
 // Geometry code casts between usize (vertex counts) and f64 (angles /
 // arclens) frequently. All casts are bounded well inside safe ranges.
@@ -48,6 +53,22 @@ const ARCLEN_ACCURACY_FACTOR: f64 = 0.5;
 /// Below this tangent magnitude we treat the tangent as degenerate and fall
 /// back to the previous step's tangent (or `(1, 0)` for the first step).
 const TANGENT_EPSILON: f64 = 1e-6;
+/// Signed curvature × half-width at which the offset rail cusps (analytically
+/// this is exactly 1; we split slightly earlier to absorb numerical grazing
+/// and to keep the cusp cap radius tangibly larger than the rail fold).
+///
+/// Sharp direction reversals (pen-lift artifacts, deliberate hairpins) make
+/// the ribbon's two rails cross each other. Because the crossing region has
+/// opposite winding from the rest of the ribbon, `Fill::NonZero` cancels it
+/// out and punches a visible notch — the user sees a hole at the end of the
+/// stroke. We split the stroke into sub-segments at these cusps and round-cap
+/// each side so the union is a swept-disk silhouette.
+///
+/// This is the pragmatic version of the classical offset + overlap-removal
+/// approach. The SOTA (Levien et al. 2024, "GPU-friendly Stroke Expansion")
+/// uses Euler-spiral centerlines where cusps emerge naturally from adaptive
+/// flattening; migrating there is a later-milestone rewrite.
+const CUSP_THRESHOLD: f64 = 0.95;
 
 /// Tessellate a stroke into a filled path. Empty for zero-sample strokes.
 #[must_use]
@@ -69,10 +90,14 @@ pub(crate) fn tessellate_stroke(stroke: &Stroke, world_to_screen: Affine) -> Bez
     let mut left: Vec<Point> = Vec::with_capacity(samples.len() * 4);
     let mut right: Vec<Point> = Vec::with_capacity(samples.len() * 4);
     let mut prev_tangent = Vec2::new(1.0, 0.0);
-    // We capture first / last tangents during the walk so the caps know how
-    // to orient themselves.
+    // We capture first / last tangents during the walk so the endpoint caps
+    // know how to orient themselves. `prev_position` and `prev_half` track
+    // the previous step's centerline and half-width so a mid-walk cusp split
+    // can cap off the closing sub-segment at the right place and radius.
     let mut first_tangent = Vec2::new(1.0, 0.0);
     let mut last_tangent = Vec2::new(1.0, 0.0);
+    let mut prev_position: Point = samples[0].position.into();
+    let mut prev_half: f32 = half_width_at_sample(&samples[0], stroke.brush);
     let mut wrote_any = false;
 
     for i in 0..samples.len() - 1 {
@@ -110,11 +135,6 @@ pub(crate) fn tessellate_stroke(stroke: &Stroke, world_to_screen: Affine) -> Bez
             } else {
                 raw_tangent / raw_tangent.hypot()
             };
-            prev_tangent = tangent;
-            if !wrote_any {
-                first_tangent = tangent;
-            }
-            last_tangent = tangent;
 
             // Pressure interpolated linearly along the SEGMENT (not the
             // cubic's arc length — adjacent samples are already dense).
@@ -123,10 +143,36 @@ pub(crate) fn tessellate_stroke(stroke: &Stroke, world_to_screen: Affine) -> Bez
             let pressure = lerp_f32(s_a.pressure, s_b.pressure, t_param as f32);
             let curved = stroke.brush.curve.apply(pressure);
             let width = lerp_f32(stroke.brush.min_width, stroke.brush.max_width, curved);
-            let half = f64::from(width) / 2.0;
+            let half_f32 = width / 2.0;
+            let half = f64::from(half_f32);
+
+            // Offset-rail cusp criterion: |κ| · half_width ≥ threshold. Only
+            // meaningful once we have a sub-segment (≥ 2 rail points) to close.
+            let kappa = signed_curvature(&seg, t_param);
+            if kappa.abs() * half >= CUSP_THRESHOLD && left.len() >= 2 {
+                emit_ribbon_subsegment(&mut path, &left, &right);
+                // Close the incoming sub-segment with a forward-bulging cap
+                // at its last rail position; open the new one with a
+                // backward-bulging cap at this step's position. Two caps
+                // rather than one because at a sharp cusp the incoming and
+                // outgoing tangents don't share a common "outward" direction.
+                append_round_cap(&mut path, prev_position, prev_tangent, prev_half, screen_scale);
+                append_round_cap(&mut path, p, -tangent, half_f32, screen_scale);
+                left.clear();
+                right.clear();
+            }
+
+            prev_tangent = tangent;
+            if !wrote_any {
+                first_tangent = tangent;
+            }
+            last_tangent = tangent;
+
             let perp = Vec2::new(-tangent.y, tangent.x);
             left.push(p + perp * half);
             right.push(p - perp * half);
+            prev_position = p;
+            prev_half = half_f32;
             wrote_any = true;
         }
     }
@@ -138,18 +184,12 @@ pub(crate) fn tessellate_stroke(stroke: &Stroke, world_to_screen: Affine) -> Bez
         return single_sample_disc(&samples[0], stroke.brush, screen_scale);
     }
 
-    // Emit the ribbon polygon: left rail forward, right rail reversed, close.
-    path.move_to(left[0]);
-    for p in &left[1..] {
-        path.line_to(*p);
-    }
-    for p in right.iter().rev() {
-        path.line_to(*p);
-    }
-    path.close_path();
+    // Emit the final (or only) sub-segment's ribbon.
+    emit_ribbon_subsegment(&mut path, &left, &right);
 
-    // Caps. Leading cap faces away from the first segment; trailing cap
-    // faces away from the last segment.
+    // Endpoint caps. Leading cap faces away from the first segment; trailing
+    // cap faces away from the last segment. These are independent of any
+    // mid-stroke cusp caps emitted during the walk.
     let first_half = half_width_at_sample(&samples[0], stroke.brush);
     let last_half = half_width_at_sample(&samples[samples.len() - 1], stroke.brush);
     append_round_cap(
@@ -168,6 +208,44 @@ pub(crate) fn tessellate_stroke(stroke: &Stroke, world_to_screen: Affine) -> Bez
     );
 
     path
+}
+
+/// Emit one ribbon sub-segment as a closed subpath: left rail forward, right
+/// rail reversed, close. Degenerate (< 2 rail points) sub-segments are
+/// silently skipped — the caller's round caps already cover the footprint.
+fn emit_ribbon_subsegment(path: &mut BezPath, left: &[Point], right: &[Point]) {
+    debug_assert_eq!(left.len(), right.len());
+    if left.len() < 2 {
+        return;
+    }
+    path.move_to(left[0]);
+    for p in &left[1..] {
+        path.line_to(*p);
+    }
+    for p in right.iter().rev() {
+        path.line_to(*p);
+    }
+    path.close_path();
+}
+
+/// Signed curvature of a cubic Bézier at parameter `t`.
+///
+/// κ(t) = (x'(t)·y''(t) − y'(t)·x''(t)) / (x'(t)² + y'(t)²)^(3/2)
+///
+/// Used to detect offset-rail cusps: the parallel curve at half-width `h` has
+/// a cusp where `|κ| · h = 1`. Returns 0 if the curve is momentarily
+/// stationary (speed near zero) to avoid a 0/0 at those points — we can't
+/// decide a cusp condition there anyway, and adjacent steps will pick it up.
+fn signed_curvature(cubic: &CubicBez, t: f64) -> f64 {
+    let d1 = cubic.deriv().eval(t).to_vec2();
+    let d2 = cubic.deriv().deriv().eval(t).to_vec2();
+    let cross = d1.x * d2.y - d1.y * d2.x;
+    let speed_sq = d1.hypot2();
+    if speed_sq < TANGENT_EPSILON * TANGENT_EPSILON {
+        0.0
+    } else {
+        cross / (speed_sq * speed_sq.sqrt())
+    }
 }
 
 fn single_sample_disc(sample: &Sample, brush: BrushParams, screen_scale: f64) -> BezPath {
@@ -370,6 +448,100 @@ mod tests {
                 assert!(p.y.is_finite(), "y must be finite: {p:?}");
             }
         }
+    }
+
+    /// Count `MoveTo` elements — each starts a new closed subpath. Used to
+    /// distinguish "one ribbon + caps" from "cusp-split multi-subpath".
+    fn subpath_count(path: &BezPath) -> usize {
+        path.elements().iter().filter(|el| matches!(el, vello::kurbo::PathEl::MoveTo(_))).count()
+    }
+
+    #[test]
+    fn straight_stroke_has_no_cusp_split() {
+        // Zero curvature everywhere — path is exactly 1 ribbon + 2 endpoint caps.
+        let brush = BrushParams {
+            min_width: 1.0,
+            max_width: 1.0,
+            curve: PressureCurve::Linear,
+            color: aj_core::LinearRgba::BLACK,
+            ..BrushParams::default()
+        };
+        let stroke = stroke_from(
+            &[
+                (0.0, 0.0, 1.0),
+                (25.0, 0.0, 1.0),
+                (50.0, 0.0, 1.0),
+                (75.0, 0.0, 1.0),
+                (100.0, 0.0, 1.0),
+            ],
+            brush,
+        );
+        let path = tessellate_stroke(&stroke, identity_transform());
+        assert_eq!(
+            subpath_count(&path),
+            3,
+            "straight stroke: 1 ribbon + 2 endpoint caps, got {} subpaths",
+            subpath_count(&path)
+        );
+    }
+
+    #[test]
+    fn pen_lift_swerve_cusp_splits_stroke() {
+        // Long vertical stroke with a sharp sideways hook at the end — the
+        // classic pen-lift artifact that caused the notches in the original
+        // bug report. The final segment has high enough curvature × half-width
+        // to trip the cusp threshold.
+        let brush = BrushParams {
+            min_width: 4.0,
+            max_width: 8.0,
+            curve: PressureCurve::Linear,
+            color: aj_core::LinearRgba::BLACK,
+            ..BrushParams::default()
+        };
+        let stroke = stroke_from(
+            &[
+                (0.0, 0.0, 0.8),
+                (0.0, 20.0, 0.8),
+                (0.0, 40.0, 0.8),
+                (0.0, 60.0, 0.8),
+                (3.0, 55.0, 0.4),
+            ],
+            brush,
+        );
+        let path = tessellate_stroke(&stroke, identity_transform());
+        // With a cusp split we get ≥ 2 ribbon subpaths + 2 cusp caps +
+        // 2 endpoint caps = at least 5 subpaths. Without the split it's 3.
+        assert!(
+            subpath_count(&path) >= 5,
+            "expected cusp split (≥5 subpaths), got {}",
+            subpath_count(&path)
+        );
+        // Every emitted point must still be finite.
+        for el in path.elements() {
+            if let vello::kurbo::PathEl::MoveTo(p) | vello::kurbo::PathEl::LineTo(p) = el {
+                assert!(p.x.is_finite() && p.y.is_finite(), "non-finite coord {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn signed_curvature_circle_matches_inverse_radius() {
+        // Classical cubic Bézier approximation of a 90° unit-circle arc has
+        // curvature ≈ 1/r = 1 at its midpoint. k is the control-point length
+        // that minimizes max radial error.
+        let k = 4.0 * (2.0_f64.sqrt() - 1.0) / 3.0;
+        let cubic = CubicBez::new(
+            Point::new(1.0, 0.0),
+            Point::new(1.0, k),
+            Point::new(k, 1.0),
+            Point::new(0.0, 1.0),
+        );
+        let kappa = signed_curvature(&cubic, 0.5);
+        assert!(
+            (kappa.abs() - 1.0).abs() < 0.05,
+            "|κ| at midpoint = {}, want ≈ 1 (radius = 1)",
+            kappa.abs()
+        );
     }
 
     #[test]

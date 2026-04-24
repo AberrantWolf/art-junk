@@ -225,6 +225,20 @@ impl App {
             .is_some_and(|c| c.ctx.is_pointer_over_area() || c.ctx.wants_pointer_input())
     }
 
+    /// True when egui is *actively* holding pointer input for a click or drag
+    /// interaction (e.g. a `SidePanel` resize handle mid-drag). Narrower than
+    /// [`Self::pointer_over_chrome`] — a plain hover over a panel makes the
+    /// latter true but this false — so it's safe to use mid-stroke without
+    /// cancelling legitimate strokes that merely traverse UI chrome.
+    ///
+    /// Needed because panel resize handles have grab-radius hitboxes that
+    /// extend into the canvas region; `is_pointer_over_area` misses them, so
+    /// the NSEvent-path `Phase::Down` can start a stroke that egui will
+    /// claim as a drag one frame later.
+    fn chrome_claimed_pointer(&self) -> bool {
+        self.chrome.as_ref().is_some_and(|c| c.ctx.is_using_pointer())
+    }
+
     /// Current inner window size in physical pixels, as a `kurbo::Size`.
     fn window_size_px(&self) -> Size {
         self.gpu.as_ref().map_or(Size::ZERO, |g| {
@@ -500,6 +514,20 @@ impl App {
                 if let Some((pid, id)) = self.active
                     && pid == pointer_id
                 {
+                    // Late chrome-ownership check: egui may have claimed a
+                    // click/drag interaction one frame after our NSEvent-path
+                    // `Phase::Down` decided this press was a canvas stroke.
+                    // If so, discard the active stroke and swallow the rest of
+                    // the gesture. The one-frame blip is invisible in practice
+                    // — nothing has rendered yet at Phase::Move, and the stroke
+                    // never reaches history.
+                    if self.chrome_claimed_pointer() {
+                        self.send(Command::CancelStroke { id });
+                        self.active = None;
+                        self.suppressed_pointers.insert(pointer_id);
+                        self.request_redraw();
+                        return;
+                    }
                     let world =
                         self.viewport.screen_to_world(sample.position.into(), self.dpi_scale);
                     sample.position = world.into();

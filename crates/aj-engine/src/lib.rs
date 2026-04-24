@@ -38,6 +38,15 @@ pub enum Command {
     EndStroke {
         id: StrokeId,
     },
+    /// Discard the active stroke without committing it to history. Used when
+    /// chrome ownership is detected after a stroke has already begun — e.g.
+    /// the pen pressed on the macOS-only path landed inside a panel-resize
+    /// grab-radius that `is_pointer_over_area` misses, and egui then claimed
+    /// the drag. The first sample's been rendered for a frame at most; we
+    /// drop it rather than leaving a stray dot in the committed document.
+    CancelStroke {
+        id: StrokeId,
+    },
     // TODO(undoable-page-edits): page mutations are currently non-undoable. They are
     // document-level attributes and arguably belong on the history stack; revisit
     // once we have a second mutation category that needs the same treatment.
@@ -137,6 +146,13 @@ pub fn apply(cmd: Command, state: &mut EngineState) -> ApplyOutcome {
                     .expect("AddStroke into empty slot is infallible");
                 state.history.record(inverse);
             }
+        }
+        Command::CancelStroke { id } => {
+            // Take and drop — the active slot clears, no history entry. If
+            // the id doesn't match the current active stroke, nothing
+            // happens (late CancelStroke for an already-ended stroke is a
+            // no-op, same as EndStroke).
+            drop(state.doc.end_stroke(id));
         }
         Command::SetPageSize(size) => {
             state.doc.set_page_size(size);
@@ -325,5 +341,50 @@ mod tests {
         let c = LinearRgba::from_srgb8([10, 200, 30, 255]);
         apply(Command::SetBrushColor(c), &mut state);
         assert_eq!(state.snapshot().scene.brush.color, c);
+    }
+
+    #[test]
+    fn cancel_stroke_drops_active_without_history() {
+        use aj_core::{Point, PointerId, Sample};
+        use std::time::Duration;
+        let mut state = EngineState::new();
+        let id = StrokeId::next();
+        let sample = Sample::mouse(Point::new(0.0, 0.0).into(), Duration::ZERO, PointerId::MOUSE);
+        apply(
+            Command::BeginStroke {
+                id,
+                sample,
+                caps: ToolCaps::empty(),
+                brush: BrushParams::default(),
+            },
+            &mut state,
+        );
+        assert!(state.doc.has_active_stroke());
+        apply(Command::CancelStroke { id }, &mut state);
+        assert!(!state.doc.has_active_stroke(), "cancel clears active stroke");
+        let status = state.history.status();
+        assert!(!status.can_undo, "cancel does not record a history entry");
+        assert!(state.snapshot().scene.strokes.is_empty(), "cancelled stroke not in snapshot");
+    }
+
+    #[test]
+    fn cancel_stroke_for_wrong_id_is_noop() {
+        use aj_core::{Point, PointerId, Sample};
+        use std::time::Duration;
+        let mut state = EngineState::new();
+        let id = StrokeId::next();
+        let other = StrokeId::next();
+        let sample = Sample::mouse(Point::new(0.0, 0.0).into(), Duration::ZERO, PointerId::MOUSE);
+        apply(
+            Command::BeginStroke {
+                id,
+                sample,
+                caps: ToolCaps::empty(),
+                brush: BrushParams::default(),
+            },
+            &mut state,
+        );
+        apply(Command::CancelStroke { id: other }, &mut state);
+        assert!(state.doc.has_active_stroke(), "wrong-id cancel leaves stroke intact");
     }
 }
