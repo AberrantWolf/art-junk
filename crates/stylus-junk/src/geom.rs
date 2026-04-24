@@ -6,6 +6,8 @@
 //! module's `From` impls are literal field copies.
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub struct Point {
     pub x: f64,
     pub y: f64,
@@ -21,6 +23,8 @@ impl Point {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub struct Size {
     pub width: f64,
     pub height: f64,

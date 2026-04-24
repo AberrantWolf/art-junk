@@ -11,8 +11,18 @@ description = "Scene-graph data types and domain model for art-junk."
 [lints]
 workspace = true
 
+[features]
+# Adds `Serialize`/`Deserialize` on document types (`BrushParams`, `Stroke`,
+# `Page`, `LinearRgba`, …) plus the `DocumentSnapshot` on-disk projection of
+# `DocumentState`. Propagates to `stylus-junk` so input types serialize too.
+serde = ["dep:serde", "stylus-junk/serde", "kurbo/serde"]
+
 [dependencies]
 stylus-junk = { workspace = true, features = ["kurbo"] }
 kurbo.workspace = true
 thiserror.workspace = true
 log.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+ciborium.workspace = true

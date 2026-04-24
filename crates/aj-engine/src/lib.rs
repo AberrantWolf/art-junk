@@ -13,6 +13,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 /// Command is `Clone` (not `Copy`) because `Sample` carries optional platform
 /// fields that may grow. Call sites send once, so losing `Copy` is free.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Command {
     BeginStroke {
         id: StrokeId,

@@ -56,7 +56,7 @@ impl Renderer {
             if path.elements().is_empty() {
                 continue;
             }
-            let [r, g, b, a] = s.brush.color;
+            let [r, g, b, a] = s.brush.color.to_srgb8();
             let color = Color::rgba8(r, g, b, a);
             scene.fill(Fill::NonZero, world_to_screen, color, None, &path);
         }

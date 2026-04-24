@@ -26,6 +26,12 @@ kurbo = ["dep:kurbo"]
 # adapter via its primitive methods directly.
 winit = ["dep:winit"]
 
+# `Serialize`/`Deserialize` on the stored input types (`Sample`, `ToolCaps`,
+# `StylusButtons`, `SampleClass`, `SampleRevision`, `Tilt`, `PointerId`,
+# `ToolKind`, `Point`, `Size`). Adapter / event-stream types (`StylusAdapter`,
+# `StylusEvent`, `Phase`, `HoverPose`, …) are runtime-only and never serialize.
+serde = ["dep:serde", "bitflags/serde"]
+
 # Platform features. Each references its native deps via `dep:foo`; Cargo's
 # target-cfg filters wrap those deps so enabling e.g. `mac` on Linux compiles
 # the mac adapter submodule but doesn't try to link `objc2` on Linux. This
@@ -41,8 +47,12 @@ web     = ["dep:wasm-bindgen", "dep:js-sys", "dep:web-sys", "dep:thiserror"]
 [dependencies]
 kurbo = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 log.workspace = true
 bitflags.workspace = true
+
+[dev-dependencies]
+ciborium.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

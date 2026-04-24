@@ -492,11 +492,11 @@ impl App {
                     self.request_redraw();
                 }
             }
-            Phase::Hover => {
-                // Not emitted in Milestone 1 (mouse-without-button produces nothing,
-                // no pen-proximity backends yet). When a pen backend lands, this
-                // arm can drive cursor/brush-preview UI without starting a stroke.
-            }
+            // `Phase::Hover` isn't emitted in Milestone 1 (no pen-proximity
+            // backends yet); when a pen backend lands, a dedicated arm can drive
+            // cursor/brush-preview UI without starting a stroke. `Phase` is
+            // `#[non_exhaustive]`, so future variants also fall through here.
+            _ => {}
         }
     }
 }

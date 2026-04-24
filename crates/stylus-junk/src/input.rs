@@ -25,6 +25,9 @@ use bitflags::bitflags;
 use crate::geom::{Point, Size};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[non_exhaustive]
 pub enum ToolKind {
     Unknown,
     Mouse,
@@ -37,7 +40,8 @@ pub enum ToolKind {
 /// is always `PointerId(0)`; fingers and pens are minted monotonically by the
 /// adapter. Not serialized in committed strokes (it's adapter-session-scoped),
 /// but lives on `Sample` so the app can route multi-touch events correctly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PointerId(pub u64);
 
 impl PointerId {
@@ -47,6 +51,7 @@ impl PointerId {
 bitflags! {
     /// Which buttons were pressed on the input device at sample time.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct StylusButtons: u8 {
         const CONTACT   = 0b0000_0001;
         const BARREL    = 0b0000_0010;
@@ -58,6 +63,7 @@ bitflags! {
     /// and per-event (on `StylusEvent::caps`) so UI can hide pressure-dependent
     /// controls before the first sample lands.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct ToolCaps: u16 {
         const PRESSURE             = 1 << 0;
         const TILT                 = 1 << 1;
@@ -77,6 +83,8 @@ bitflags! {
 /// the canonical storage form; altitude/azimuth (used by iOS and Web L3) are
 /// trivially derivable on demand.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub struct Tilt {
     pub x_deg: f32,
     pub y_deg: f32,
@@ -85,6 +93,9 @@ pub struct Tilt {
 /// Whether a sample is final, predicted, or an estimate that may be revised.
 /// Milestone 1 only emits `Committed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[non_exhaustive]
 pub enum SampleClass {
     Committed,
     Predicted,
@@ -93,12 +104,17 @@ pub enum SampleClass {
 
 /// A single input sample. See module-level docs for field semantics.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub struct Sample {
     pub position: Point,
     pub timestamp: Duration,
     pub pressure: f32,
     pub tool: ToolKind,
     pub buttons: StylusButtons,
+    /// Adapter-session-scoped. `#[serde(skip)]` + `#[serde(default)]` so
+    /// saved strokes don't carry a stale id; reload gives `PointerId::MOUSE`.
+    #[cfg_attr(feature = "serde", serde(skip, default))]
     pub pointer_id: PointerId,
     pub class: SampleClass,
 
@@ -209,6 +225,8 @@ impl Sample {
 /// Applying a revision promotes the sample's `class` from `Estimated` to
 /// `Committed`; future revisions for the same `update_index` are dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub struct SampleRevision {
     pub pressure: Option<f32>,
     pub tilt: Option<Tilt>,

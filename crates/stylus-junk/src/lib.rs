@@ -76,6 +76,7 @@ pub use windows_tablet::{WindowsTabletBackend, WindowsTabletInstallError};
 /// on `Sample` so stored strokes (which are always mid-stroke moves) don't
 /// carry a field that would be meaningless on persistence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Phase {
     Hover,
     Down,

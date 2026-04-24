@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod input;
 
-pub use input::{BrushParams, MAX_WIDTH_MAX, MAX_WIDTH_MIN, PressureCurve};
+pub use input::{BrushParams, LinearRgba, MAX_WIDTH_MAX, MAX_WIDTH_MIN, PressureCurve};
 // Input-sample types live in `stylus-junk`; re-export so existing aj-core
 // consumers keep working with their current import paths.
 pub use stylus_junk::{
@@ -20,7 +20,9 @@ pub use kurbo::{Affine, Point, Size, Vec2};
 /// Document page: the bounded "paper" strokes live in. Orthogonal `show_bounds` /
 /// `clip_to_bounds` flags span bounded-paper, infinite-canvas, and artboard-with-bleed
 /// workflows from one primitive.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub struct Page {
     pub size: Size,
     pub show_bounds: bool,
@@ -34,17 +36,29 @@ impl Default for Page {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StrokeId(pub u64);
+
+static STROKE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 impl StrokeId {
     #[must_use]
     pub fn next() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+        Self(STROKE_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Raise the global counter so subsequent `StrokeId::next()` returns a
+    /// value strictly greater than `target`. Used by the loader after
+    /// deserializing a document, so new strokes don't collide with loaded
+    /// ones. No-op if the counter is already ahead.
+    pub fn bump_to(target: u64) {
+        STROKE_ID_COUNTER.fetch_max(target.saturating_add(1), Ordering::Relaxed);
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub struct Stroke {
     pub id: StrokeId,
     pub samples: Vec<Sample>,
@@ -206,6 +220,70 @@ impl DocumentState {
         }
         SceneSnapshot { page: self.page, brush: self.brush, strokes }
     }
+
+    /// Committed strokes in order. Excludes the active (mid-drag) stroke —
+    /// the on-disk projection drops it.
+    #[must_use]
+    pub fn committed_strokes(&self) -> &[Stroke] {
+        &self.strokes
+    }
+}
+
+/// On-disk projection of a `DocumentState`. Distinct from both the runtime
+/// state (has private fields + invariants) and the renderer's `SceneSnapshot`
+/// (includes the active mid-drag stroke). Saving is a validating projection:
+/// the active stroke is dropped, undo history is dropped, the live brush is
+/// preserved, and the snapshot carries a version tag for future migrations.
+///
+/// Round-trip is lossy by design — reloading a saved document gives you the
+/// committed strokes and the live brush setup; in-flight gesture state and
+/// undo history do not persist.
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct DocumentSnapshot {
+    /// Wire version. `1` today. A loader that encounters an unknown version
+    /// should warn and attempt best-effort parse rather than hard-fail.
+    pub doc_version: u32,
+    pub page: Page,
+    /// The *live* brush — what a new stroke would be stamped with. User-
+    /// visible state (slider positions); preserved across save/load.
+    pub brush: BrushParams,
+    pub strokes: Vec<Stroke>,
+}
+
+#[cfg(feature = "serde")]
+const CURRENT_DOC_VERSION: u32 = 1;
+
+#[cfg(feature = "serde")]
+impl From<&DocumentState> for DocumentSnapshot {
+    fn from(state: &DocumentState) -> Self {
+        Self {
+            doc_version: CURRENT_DOC_VERSION,
+            page: state.page,
+            brush: state.brush,
+            strokes: state.strokes.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<DocumentSnapshot> for DocumentState {
+    fn from(snap: DocumentSnapshot) -> Self {
+        if snap.doc_version != CURRENT_DOC_VERSION {
+            log::warn!(
+                "DocumentSnapshot has doc_version {}, current is {}; attempting best-effort load",
+                snap.doc_version,
+                CURRENT_DOC_VERSION
+            );
+        }
+        // Keep the StrokeId counter monotonic: any future `StrokeId::next()`
+        // must not collide with a loaded id.
+        if let Some(max) = snap.strokes.iter().map(|s| s.id.0).max() {
+            StrokeId::bump_to(max);
+        }
+        Self { page: snap.page, brush: snap.brush, strokes: snap.strokes, active: None }
+    }
 }
 
 /// Walk a stroke's samples in reverse (revisions are almost always for the
@@ -223,6 +301,7 @@ fn revise_in_stroke(stroke: &mut Stroke, update_index: u64, revision: SampleRevi
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EditError {
     #[error("stroke {0:?} not found")]
     Missing(StrokeId),
@@ -232,6 +311,7 @@ pub enum EditError {
 /// inverse it computed against the live state — so e.g. `RemoveStroke(id)` returns
 /// `AddStroke(stroke_data_that_was_removed)`, capturing the data before it's gone.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Edit {
     AddStroke(Stroke),
     RemoveStroke(StrokeId),

@@ -11,8 +11,16 @@ description = "Actor-thread engine, Command/Event plumbing, and snapshot publica
 [lints]
 workspace = true
 
+[features]
+# Passthrough: activates `aj-core/serde` so `DocumentSnapshot` and its
+# transitive types derive `Serialize`/`Deserialize`. No engine types
+# themselves serialize yet; this feature exists so when they do (history
+# preservation, command-log replay) the flag is already in place.
+serde = ["dep:serde", "aj-core/serde"]
+
 [dependencies]
 aj-core.workspace = true
 arc-swap.workspace = true
 crossbeam-channel.workspace = true
 log.workspace = true
+serde = { workspace = true, optional = true }
