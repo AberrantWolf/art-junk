@@ -122,6 +122,9 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "thiserror 2.0.18",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "winit",
  "x11rb",
 ]
