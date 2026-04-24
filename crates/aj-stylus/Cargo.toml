@@ -23,3 +23,12 @@ objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSResponder", "NSView
 objc2-foundation = { version = "0.3", features = ["NSNotification", "NSString", "NSGeometry", "NSThread"] }
 block2 = "0.6"
 thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Versions chosen to match what winit already resolves so cargo picks a
+# single copy of each crate (verified via `cargo tree`).
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+raw-window-handle = "0.6"
+thiserror.workspace = true

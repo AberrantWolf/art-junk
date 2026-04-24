@@ -14,7 +14,12 @@ mod adapter;
 #[cfg(target_os = "macos")]
 mod macos_tablet;
 
+#[cfg(target_os = "linux")]
+mod linux_wayland_tablet;
+
 pub use adapter::StylusAdapter;
+#[cfg(target_os = "linux")]
+pub use linux_wayland_tablet::{WaylandTabletBackend, WaylandTabletInstallError};
 #[cfg(target_os = "macos")]
 pub use macos_tablet::{MacTabletBackend, MacTabletInstallError};
 #[cfg(target_os = "macos")]
