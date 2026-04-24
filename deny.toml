@@ -19,6 +19,12 @@ confidence-threshold = 0.9
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # `paste` is unmaintained but only reaches us transitively via
+    # `metal -> wgpu-hal -> wgpu` on macOS/iOS GPU backends. We cannot drop
+    # it without a wgpu major bump; the advisory is informational (no CVE).
+    "RUSTSEC-2024-0436",
+]
 
 [bans]
 multiple-versions = "warn"

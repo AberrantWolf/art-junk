@@ -46,6 +46,7 @@ use winit::event::{ElementState, Force, MouseButton, Touch, TouchPhase, WindowEv
 
 use crate::{Phase, StylusEvent};
 
+#[cfg(any(target_os = "macos", test))]
 pub(crate) mod mac;
 
 #[cfg(any(target_os = "linux", test))]
@@ -82,7 +83,9 @@ pub struct StylusAdapter {
     /// `update_index` emitted with the original `SampleClass::Estimated`.
     /// Value is the `PointerId` whose stroke owns the estimate.
     pending_estimated: HashMap<u64, PointerId>,
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     next_update_index: u64,
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     mac_anchor: Option<PlatformTimestampAnchor>,
     #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
     wayland_anchor: Option<PlatformTimestampAnchor>,
@@ -119,6 +122,7 @@ pub(crate) struct PenState {
     pub(crate) active_pointer_id: Option<PointerId>,
     pub(crate) caps: ToolCaps,
     pub(crate) tool: ToolKind,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) unique_id: Option<u64>,
     pub(crate) last_position: Option<Point>,
 }
@@ -263,6 +267,7 @@ impl StylusAdapter {
     /// `NSApplicationDidResignActive`). Any active strokes get synthesized
     /// Cancel events so downstream tears them down instead of leaving
     /// half-drawn lines stranded.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     pub(crate) fn on_focus_lost(&mut self) {
         // Cancel mouse stroke.
         if self.mouse_down {

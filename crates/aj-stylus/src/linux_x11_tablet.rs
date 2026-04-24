@@ -39,7 +39,7 @@ use x11rb::errors::{ConnectError, ConnectionError, ReplyError};
 use x11rb::protocol::Event;
 use x11rb::protocol::xinput::{
     self, ConnectionExt as XInputExt, DeviceClassData, DeviceClassDataValuator, DeviceId,
-    DeviceType, EventMask, Fp3232, HierarchyInfoMask, XIDeviceInfo, XIEventMask,
+    DeviceType, EventMask, Fp3232, HierarchyMask, XIDeviceInfo, XIEventMask,
 };
 use x11rb::protocol::xproto::{Atom, ConnectionExt as XProtoExt, Window};
 use x11rb::rust_connection::RustConnection;
@@ -453,11 +453,11 @@ fn handle_event(
             // re-select; a no-op in the common case where the event was for
             // a keyboard or some other device we don't care about.
             let flags_relevant = e.flags
-                & (HierarchyInfoMask::SLAVE_ADDED
-                    | HierarchyInfoMask::SLAVE_REMOVED
-                    | HierarchyInfoMask::SLAVE_ATTACHED
-                    | HierarchyInfoMask::SLAVE_DETACHED)
-                != HierarchyInfoMask::from(0u32);
+                & (HierarchyMask::SLAVE_ADDED
+                    | HierarchyMask::SLAVE_REMOVED
+                    | HierarchyMask::SLAVE_ATTACHED
+                    | HierarchyMask::SLAVE_DETACHED)
+                != HierarchyMask::from(0u32);
             if flags_relevant {
                 if let Err(err) = devices.reenumerate(conn, atoms) {
                     log::warn!("x11 tablet: re-enumeration failed: {err}");
