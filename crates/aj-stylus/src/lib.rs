@@ -14,7 +14,12 @@ mod adapter;
 #[cfg(target_os = "macos")]
 mod macos_tablet;
 
+#[cfg(target_os = "linux")]
+mod linux_x11_tablet;
+
 pub use adapter::StylusAdapter;
+#[cfg(target_os = "linux")]
+pub use linux_x11_tablet::{X11TabletBackend, X11TabletInstallError};
 #[cfg(target_os = "macos")]
 pub use macos_tablet::{MacTabletBackend, MacTabletInstallError};
 #[cfg(target_os = "macos")]

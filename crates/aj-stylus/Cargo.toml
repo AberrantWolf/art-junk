@@ -23,3 +23,8 @@ objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSResponder", "NSView
 objc2-foundation = { version = "0.3", features = ["NSNotification", "NSString", "NSGeometry", "NSThread"] }
 block2 = "0.6"
 thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["xinput"] }
+raw-window-handle = "0.6"
+thiserror.workspace = true
