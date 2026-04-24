@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod input;
 
-pub use input::{BrushParams, LinearRgba, MAX_WIDTH_MAX, MAX_WIDTH_MIN, PressureCurve};
+pub use input::{BrushParams, LinearRgba, MAX_WIDTH_MAX, MAX_WIDTH_MIN, MixingMode, PressureCurve};
 // Input-sample types live in `stylus-junk`; re-export so existing aj-core
 // consumers keep working with their current import paths.
 pub use stylus_junk::{
@@ -152,6 +152,12 @@ impl DocumentState {
     pub fn set_brush_min_ratio(&mut self, ratio: f32) {
         let ratio = ratio.clamp(0.0, 1.0);
         self.brush.min_width = ratio * self.brush.max_width;
+    }
+
+    /// Set the brush's color. The picker hands in a gamut-mapped `LinearRgba`;
+    /// the engine does no further validation — clamp lives at the boundary.
+    pub fn set_brush_color(&mut self, color: LinearRgba) {
+        self.brush.color = color;
     }
 
     pub fn begin_stroke(&mut self, stroke: Stroke) {

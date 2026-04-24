@@ -5,7 +5,7 @@
 
 use aj_core::{BrushParams, MAX_WIDTH_MAX, MAX_WIDTH_MIN};
 
-use super::BrushAction;
+use super::{BrushAction, color_picker};
 
 /// Draw the brush panel if `visible`. Emits `BrushAction`s into `pending` on
 /// slider changes; the main loop dispatches them alongside other pending
@@ -53,6 +53,10 @@ pub fn draw(
             if ratio_slider.changed() {
                 pending.push(BrushAction::SetMinRatio(ratio));
             }
+
+            ui.separator();
+            ui.label("Color");
+            color_picker::draw(ui, brush.color, pending);
         });
     });
 }

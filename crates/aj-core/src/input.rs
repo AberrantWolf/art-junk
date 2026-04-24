@@ -99,6 +99,11 @@ pub struct BrushParams {
     /// so `aj-core` stays free of render-pipeline deps; the renderer converts
     /// once at the draw site via `to_srgb8`.
     pub color: LinearRgba,
+    /// How overlapping paint from this brush combines with what's already on
+    /// the canvas. `#[serde(default)]` so documents written before this field
+    /// existed deserialize as `MixingMode::Additive`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub mixing_mode: MixingMode,
 }
 
 impl Default for BrushParams {
@@ -108,8 +113,25 @@ impl Default for BrushParams {
             max_width: 4.0,
             curve: PressureCurve::Linear,
             color: LinearRgba::from_srgb8([0, 200, 220, 255]),
+            mixing_mode: MixingMode::Additive,
         }
     }
+}
+
+/// How a brush's paint combines with the canvas underneath it. Kept as a
+/// dedicated enum so a future paint-like pigment mixing milestone (spectral
+/// Kubelka-Munk + Jakob-Hanika upsampling) can add a variant without churning
+/// every `BrushParams` call site. `#[non_exhaustive]` makes that forward-
+/// compatible: downstream `match` arms must already handle an unknown variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[non_exhaustive]
+pub enum MixingMode {
+    /// Linear-sRGB alpha-composite — what GPUs do natively. Fast, correct for
+    /// light; wrong for paint (yellow + blue = gray rather than green).
+    #[default]
+    Additive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +163,7 @@ mod tests {
         assert!(b.min_width < b.max_width);
         assert_eq!(b.curve, PressureCurve::Linear);
         assert_eq!(b.color.to_srgb8(), [0, 200, 220, 255]);
+        assert_eq!(b.mixing_mode, MixingMode::Additive);
     }
 
     #[test]

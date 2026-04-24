@@ -1,3 +1,4 @@
+mod color;
 mod compose;
 mod gpu;
 mod shortcuts;
@@ -5,6 +6,7 @@ mod ui;
 mod viewport;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -65,6 +67,12 @@ struct App {
     /// not part of the document, not in the engine. Toggled via
     /// `View > Brush Panel`.
     brush_panel_visible: bool,
+    /// Pointers whose `Down` sample landed over egui chrome. Their subsequent
+    /// `Move` / `Up` / `Cancel` events are swallowed here, so strokes can't
+    /// sneak through the platform-specific paths (e.g. the macOS `NSEvent`
+    /// monitor) that deliver stylus samples without going through
+    /// `route_input`'s chrome gate.
+    suppressed_pointers: HashSet<PointerId>,
 }
 
 impl App {
@@ -84,6 +92,7 @@ impl App {
             viewport: Viewport::default(),
             dpi_scale: 1.0,
             brush_panel_visible: true,
+            suppressed_pointers: HashSet::new(),
         }
     }
 
@@ -459,12 +468,21 @@ impl App {
     }
 
     fn on_sample(&mut self, mut sample: aj_core::Sample, phase: Phase, caps: aj_core::ToolCaps) {
-        let world = self.viewport.screen_to_world(sample.position.into(), self.dpi_scale);
-        sample.position = world.into();
         let pointer_id = sample.pointer_id;
 
         match phase {
             Phase::Down => {
+                // Stylus samples arriving via the macOS NSEvent monitor don't
+                // pass through `route_input`'s chrome gate; re-check here so a
+                // pen tap on the brush panel (picker, swatch, etc.) doesn't
+                // start a canvas stroke. Track the pointer id so the
+                // subsequent Move/Up samples for this gesture are swallowed.
+                if self.pointer_over_chrome() {
+                    self.suppressed_pointers.insert(pointer_id);
+                    return;
+                }
+                let world = self.viewport.screen_to_world(sample.position.into(), self.dpi_scale);
+                sample.position = world.into();
                 let id = StrokeId::next();
                 self.active = Some((pointer_id, id));
                 // Freeze the current live brush into this stroke. Subsequent
@@ -476,14 +494,23 @@ impl App {
                 self.request_redraw();
             }
             Phase::Move => {
+                if self.suppressed_pointers.contains(&pointer_id) {
+                    return;
+                }
                 if let Some((pid, id)) = self.active
                     && pid == pointer_id
                 {
+                    let world =
+                        self.viewport.screen_to_world(sample.position.into(), self.dpi_scale);
+                    sample.position = world.into();
                     self.send(Command::AddSample { id, sample });
                     self.request_redraw();
                 }
             }
             Phase::Up | Phase::Cancel => {
+                if self.suppressed_pointers.remove(&pointer_id) {
+                    return;
+                }
                 if let Some((pid, id)) = self.active
                     && pid == pointer_id
                 {

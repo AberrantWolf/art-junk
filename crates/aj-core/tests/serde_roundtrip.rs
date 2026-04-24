@@ -6,8 +6,8 @@
 use std::time::Duration;
 
 use aj_core::{
-    BrushParams, DocumentSnapshot, DocumentState, Edit, LinearRgba, Page, PointerId, PressureCurve,
-    Sample, Size, Stroke, StrokeId, ToolCaps,
+    BrushParams, DocumentSnapshot, DocumentState, Edit, LinearRgba, MixingMode, Page, PointerId,
+    PressureCurve, Sample, Size, Stroke, StrokeId, ToolCaps,
 };
 
 fn cbor_roundtrip<T: serde::Serialize + serde::de::DeserializeOwned>(value: &T) -> T {
@@ -33,6 +33,7 @@ fn snapshot_fixture() -> DocumentSnapshot {
             max_width: 12.0,
             curve: PressureCurve::Linear,
             color: LinearRgba::from_srgb8([200, 80, 40, 255]),
+            mixing_mode: MixingMode::Additive,
         },
         strokes: vec![
             Stroke {
@@ -169,7 +170,47 @@ fn brush_params_roundtrips() {
         max_width: 7.5,
         curve: PressureCurve::Linear,
         color: LinearRgba::from_srgb8([240, 120, 30, 255]),
+        mixing_mode: MixingMode::Additive,
     };
     let got: BrushParams = cbor_roundtrip(&b);
     assert_eq!(got, b);
+}
+
+#[test]
+fn mixing_mode_roundtrips() {
+    let got: MixingMode = cbor_roundtrip(&MixingMode::Additive);
+    assert_eq!(got, MixingMode::Additive);
+}
+
+/// Fence: a CBOR blob minted without the `mixing_mode` key (i.e. one produced
+/// by a pre-field version of this schema) must still deserialize into a
+/// current `BrushParams`, with `mixing_mode` defaulted to `Additive`. Without
+/// `#[serde(default)]` on the field this test would fail with "missing field".
+#[test]
+fn brush_params_deserializes_legacy_blob_without_mixing_mode() {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "snake_case")]
+    struct LegacyBrushParams {
+        min_width: f32,
+        max_width: f32,
+        curve: PressureCurve,
+        color: LinearRgba,
+    }
+
+    let legacy = LegacyBrushParams {
+        min_width: 0.5,
+        max_width: 4.0,
+        curve: PressureCurve::Linear,
+        color: LinearRgba::from_srgb8([0, 200, 220, 255]),
+    };
+
+    let mut bytes = Vec::new();
+    ciborium::into_writer(&legacy, &mut bytes).expect("serialize legacy");
+    let got: BrushParams = ciborium::from_reader(bytes.as_slice()).expect("deserialize current");
+
+    assert_eq!(got.min_width, 0.5);
+    assert_eq!(got.max_width, 4.0);
+    assert_eq!(got.curve, PressureCurve::Linear);
+    assert_eq!(got.color.to_srgb8(), [0, 200, 220, 255]);
+    assert_eq!(got.mixing_mode, MixingMode::Additive);
 }

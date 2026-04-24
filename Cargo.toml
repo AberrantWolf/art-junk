@@ -49,6 +49,9 @@ egui-winit = "0.29"
 strum = "0.26"
 strum_macros = "0.26"
 
+palette = { version = "0.7", default-features = false, features = ["std"] }
+palette-gamut-mapping = "0.1"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 

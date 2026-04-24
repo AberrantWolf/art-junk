@@ -306,6 +306,7 @@ mod tests {
             max_width: 10.0,
             curve: PressureCurve::Linear,
             color: aj_core::LinearRgba::BLACK,
+            ..BrushParams::default()
         };
         let stroke = stroke_from(&[(50.0, 50.0, 1.0)], brush);
         let path = tessellate_stroke(&stroke, identity_transform());
@@ -322,6 +323,7 @@ mod tests {
             max_width: 1.0,
             curve: PressureCurve::Linear,
             color: aj_core::LinearRgba::BLACK,
+            ..BrushParams::default()
         };
         let stroke = stroke_from(&[(0.0, 0.0, 1.0), (100.0, 0.0, 1.0)], brush);
         let path = tessellate_stroke(&stroke, identity_transform());
@@ -379,6 +381,7 @@ mod tests {
             max_width: 20.0,
             curve: PressureCurve::Linear,
             color: aj_core::LinearRgba::BLACK,
+            ..BrushParams::default()
         };
         let stroke = stroke_from(
             &[

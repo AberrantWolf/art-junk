@@ -5,8 +5,9 @@
 //! layout of the menu bar. Adding a new action here; binding it to a key there.
 
 pub mod brush_panel;
+pub mod color_picker;
 
-use aj_core::{BrushParams, HistoryStatus, Page};
+use aj_core::{BrushParams, HistoryStatus, LinearRgba, Page};
 use aj_engine::{Command, Engine};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -65,6 +66,10 @@ pub enum ViewAction {
 pub enum BrushAction {
     SetMaxWidth(f32),
     SetMinRatio(f32),
+    /// Set the brush's color. The color picker gamut-maps to sRGB before
+    /// emitting this action, so the engine can store it without further
+    /// validation.
+    SetColor(LinearRgba),
     DecreaseMaxWidth,
     IncreaseMaxWidth,
     DecreaseMinRatio,
@@ -76,6 +81,7 @@ impl BrushAction {
         let cmd = match self {
             Self::SetMaxWidth(v) => Command::SetBrushMaxWidth(v),
             Self::SetMinRatio(r) => Command::SetBrushMinRatio(r),
+            Self::SetColor(c) => Command::SetBrushColor(c),
             Self::DecreaseMaxWidth => {
                 Command::SetBrushMaxWidth(current.max_width * BRUSH_WIDTH_FACTOR_DECR)
             }

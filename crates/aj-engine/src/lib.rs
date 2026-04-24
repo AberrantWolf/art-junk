@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use aj_core::{
-    AppSnapshot, BrushParams, DocumentState, Edit, HistoryStatus, Sample, SampleRevision, Size,
-    Stroke, StrokeId, ToolCaps,
+    AppSnapshot, BrushParams, DocumentState, Edit, HistoryStatus, LinearRgba, Sample,
+    SampleRevision, Size, Stroke, StrokeId, ToolCaps,
 };
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -53,6 +53,9 @@ pub enum Command {
     /// Sets `min_width` as a ratio of the current max, clamped to `[0, 1]`.
     /// Used by the min-ratio slider and `Alt+[` / `Alt+]` shortcuts.
     SetBrushMinRatio(f32),
+    /// Sets the brush color. Expected to be already gamut-mapped to sRGB by
+    /// the picker — the engine is not the place to decide how to land a color.
+    SetBrushColor(LinearRgba),
     Undo,
     Redo,
     Shutdown,
@@ -152,6 +155,9 @@ pub fn apply(cmd: Command, state: &mut EngineState) -> ApplyOutcome {
         }
         Command::SetBrushMinRatio(r) => {
             state.doc.set_brush_min_ratio(r);
+        }
+        Command::SetBrushColor(c) => {
+            state.doc.set_brush_color(c);
         }
         Command::Undo => {
             if state.doc.has_active_stroke() {
@@ -307,8 +313,17 @@ mod tests {
         apply(Command::SetBrushMaxWidth(10.0), &mut state);
         apply(Command::SetBrushMinWidth(2.0), &mut state);
         apply(Command::SetBrushMinRatio(0.3), &mut state);
+        apply(Command::SetBrushColor(LinearRgba::WHITE), &mut state);
         let status = state.history.status();
         assert!(!status.can_undo);
         assert!(!status.can_redo);
+    }
+
+    #[test]
+    fn set_brush_color_propagates_through_snapshot() {
+        let mut state = EngineState::new();
+        let c = LinearRgba::from_srgb8([10, 200, 30, 255]);
+        apply(Command::SetBrushColor(c), &mut state);
+        assert_eq!(state.snapshot().scene.brush.color, c);
     }
 }
