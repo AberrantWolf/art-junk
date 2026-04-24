@@ -35,6 +35,12 @@ x11rb = { version = "0.13", features = ["xinput"] }
 raw-window-handle = "0.6"
 thiserror.workspace = true
 
+[target.'cfg(target_os = "android")'.dependencies]
+# `ndk` / `android-activity` are the real MotionEvent source; pulled in
+# only on Android to avoid pulling host-irrelevant crates into the mac
+# build.
+thiserror.workspace = true
+
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"
 objc2-ui-kit = { version = "0.3", features = [

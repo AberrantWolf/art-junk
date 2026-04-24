@@ -29,7 +29,12 @@ mod web_pointer;
 #[cfg(target_os = "ios")]
 mod ios_touch;
 
+#[cfg(target_os = "android")]
+mod android_motion;
+
 pub use adapter::StylusAdapter;
+#[cfg(target_os = "android")]
+pub use android_motion::{AndroidMotionEventStub, handle_android_motion};
 #[cfg(target_os = "ios")]
 pub use ios_touch::{IosStylusBackend, IosStylusInstallError, install as install_ios};
 #[cfg(target_os = "linux")]
