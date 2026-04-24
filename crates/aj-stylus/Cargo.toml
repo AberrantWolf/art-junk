@@ -25,6 +25,11 @@ block2 = "0.6"
 thiserror.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Wayland-native path (runtime-selected via `RawDisplayHandle::Wayland`).
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+# X11 / XWayland path (runtime-selected via `RawDisplayHandle::Xlib`/`Xcb`).
 x11rb = { version = "0.13", features = ["xinput"] }
 raw-window-handle = "0.6"
 thiserror.workspace = true
