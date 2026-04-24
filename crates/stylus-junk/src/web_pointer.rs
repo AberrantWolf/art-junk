@@ -32,8 +32,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use aj_core::{Tilt, ToolCaps};
-use kurbo::Point;
+use crate::{Point, Tilt, ToolCaps};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{

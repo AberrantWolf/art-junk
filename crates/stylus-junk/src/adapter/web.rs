@@ -7,8 +7,7 @@
 
 use std::time::Duration;
 
-use aj_core::{PointerId, Sample, SampleClass, StylusButtons, Tilt, ToolCaps, ToolKind};
-use kurbo::Point;
+use crate::{Point, PointerId, Sample, SampleClass, StylusButtons, Tilt, ToolCaps, ToolKind};
 
 use super::{OPTIMISTIC_PEN_CAPS, PlatformTimestampAnchor, StylusAdapter, alloc_pointer_id};
 use crate::{Phase, StylusEvent};
@@ -18,7 +17,7 @@ use crate::{Phase, StylusEvent};
 /// stable if the browser momentarily reports a different `buttons` bitmask
 /// mid-stroke — observed with Wacom + Chromium when the side switch toggles
 /// during a drag.
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
 pub(crate) struct WebPointerState {
     pub(crate) adapter_pointer_id: PointerId,
     pub(crate) tool: ToolKind,
@@ -26,7 +25,7 @@ pub(crate) struct WebPointerState {
     pub(crate) last_position: Option<Point>,
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WebPointerType {
     Pen,
@@ -39,7 +38,7 @@ pub(crate) enum WebPointerType {
 /// `pen` pointer moves with `pressure === 0` (no tip contact). `Predicted`
 /// is for events drained from `getPredictedEvents()` — they render to the
 /// Placeholder layer only and discard on the next real delivery.
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WebSourcePhase {
     Down,
@@ -54,7 +53,7 @@ pub(crate) enum WebSourcePhase {
 /// `event.timeStamp / 1000.0` (`DOMHighResTimeStamp` is ms since navigation
 /// start; monotonic). Position is physical px canvas-relative, pre-converted
 /// by the backend from `(client_x - rect.left) * devicePixelRatio`.
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WebRawSample {
     pub position_physical_px: Point,
@@ -70,7 +69,7 @@ pub(crate) struct WebRawSample {
     pub source_phase: WebSourcePhase,
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WebProximitySample {
     pub pointer_id: i32,
@@ -80,7 +79,7 @@ pub(crate) struct WebProximitySample {
 }
 
 impl StylusAdapter {
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
     pub(crate) fn handle_web_raw(&mut self, raw: WebRawSample) {
         let ts = PlatformTimestampAnchor::translate_or_anchor(
             &mut self.web_anchor,
@@ -155,7 +154,7 @@ impl StylusAdapter {
         }
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
     pub(crate) fn handle_web_proximity(&mut self, prox: WebProximitySample) {
         if prox.is_entering {
             if let Some(state) = self.web_pointers.get_mut(&prox.pointer_id) {
@@ -181,7 +180,7 @@ impl StylusAdapter {
     }
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
 fn classify_web_tool(pointer_type: WebPointerType, button_mask: u32) -> ToolKind {
     // Eraser is signalled by `buttons & 0x20` — Pointer Events has no
     // dedicated pointer_type for eraser, unlike iOS / Android.
@@ -194,7 +193,7 @@ fn classify_web_tool(pointer_type: WebPointerType, button_mask: u32) -> ToolKind
     }
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
 fn build_web_sample(
     raw: &WebRawSample,
     timestamp: Duration,
@@ -222,8 +221,7 @@ fn build_web_sample(
 
 #[cfg(test)]
 mod tests {
-    use aj_core::{PointerId, SampleClass, StylusButtons, Tilt, ToolKind};
-    use kurbo::Point;
+    use crate::{Point, PointerId, SampleClass, StylusButtons, Tilt, ToolKind};
 
     use super::super::OPTIMISTIC_PEN_CAPS;
     use super::super::tests_common::{adapter, drained, expect_sample};

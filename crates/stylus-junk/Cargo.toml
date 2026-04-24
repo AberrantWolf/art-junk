@@ -1,0 +1,108 @@
+[package]
+name = "stylus-junk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Cross-platform stylus / pen input and palm-rejection adapter."
+
+[lints]
+workspace = true
+
+[features]
+# Matches what art-junk itself enables. External consumers can flip any
+# subset off. Publishing-for-real will likely narrow this to `winit` only.
+default = ["kurbo", "winit", "mac", "windows", "wayland", "x11", "ios", "android", "web"]
+
+# `From`/`Into` bridges between `stylus_junk::{Point, Size}` and
+# `kurbo::{Point, Size}`. Consumers who don't use kurbo leave this off.
+kurbo = ["dep:kurbo"]
+
+# Adds `StylusAdapter::on_window_event(&winit::event::WindowEvent)` plus
+# `pub use ::winit;` at the crate root to prevent two-winit-versions bugs.
+# Consumers on SDL or a different winit major leave this off and feed the
+# adapter via its primitive methods directly.
+winit = ["dep:winit"]
+
+# Platform features. Each references its native deps via `dep:foo`; Cargo's
+# target-cfg filters wrap those deps so enabling e.g. `mac` on Linux compiles
+# the mac adapter submodule but doesn't try to link `objc2` on Linux. This
+# is the same pattern `winit` uses.
+mac     = ["dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:block2", "dep:thiserror"]
+ios     = ["dep:objc2", "dep:objc2-ui-kit", "dep:objc2-foundation", "dep:block2", "dep:thiserror"]
+windows = ["dep:windows-sys", "dep:thiserror"]
+wayland = ["dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols", "dep:raw-window-handle", "dep:thiserror"]
+x11     = ["dep:x11rb", "dep:raw-window-handle", "dep:thiserror"]
+android = []
+web     = ["dep:wasm-bindgen", "dep:js-sys", "dep:web-sys", "dep:thiserror"]
+
+[dependencies]
+kurbo = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
+log.workspace = true
+bitflags.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", optional = true, features = ["NSEvent", "NSResponder", "NSView", "NSWindow", "NSApplication", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3", optional = true, features = ["NSNotification", "NSString", "NSGeometry", "NSThread"] }
+block2 = { version = "0.6", optional = true }
+thiserror = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Wayland-native path (runtime-selected via `RawDisplayHandle::Wayland`).
+wayland-client = { version = "0.31", optional = true }
+wayland-backend = { version = "0.3", optional = true, features = ["client_system"] }
+wayland-protocols = { version = "0.32", optional = true, features = ["client", "unstable"] }
+# X11 / XWayland path (runtime-selected via `RawDisplayHandle::Xlib`/`Xcb`).
+x11rb = { version = "0.13", optional = true, features = ["xinput"] }
+raw-window-handle = { version = "0.6", optional = true }
+thiserror = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+thiserror = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-ui-kit = { version = "0.3", optional = true, features = [
+    "UIResponder",
+    "UIView",
+    "UIEvent",
+    "UITouch",
+    "UIApplication",
+] }
+objc2-foundation = { version = "0.3", optional = true, features = ["NSNotification", "NSSet", "NSString"] }
+block2 = { version = "0.6", optional = true }
+thiserror = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_Pointer",
+    "Win32_UI_Shell",
+    "Win32_System_Performance",
+    "Win32_Graphics_Gdi",
+] }
+thiserror = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlCanvasElement",
+    "CssStyleDeclaration",
+    "EventTarget",
+    "Event",
+    "AddEventListenerOptions",
+    "MouseEvent",
+    "PointerEvent",
+    "DomRect",
+] }
+thiserror = { workspace = true, optional = true }

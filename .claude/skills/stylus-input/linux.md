@@ -1,6 +1,6 @@
 ---
 name: stylus-input-linux
-description: Linux pen/stylus backend for aj-stylus. Two paths — Wayland tablet-v2 (zwp_tablet_manager_v2) for native Wayland sessions, XInput2 for X11/XWayland. Both ship, selected at runtime.
+description: Linux pen/stylus backend for stylus-junk. Two paths — Wayland tablet-v2 (zwp_tablet_manager_v2) for native Wayland sessions, XInput2 for X11/XWayland. Both ship, selected at runtime.
 ---
 
 # Linux stylus input

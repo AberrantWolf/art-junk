@@ -33,7 +33,7 @@
 //! ```ignore
 //! for event in android_app.input_events_iter() {
 //!     if let InputEvent::Motion(m) = event {
-//!         aj_stylus::handle_android_motion(m, &adapter);
+//!         stylus_junk::handle_android_motion(m, &adapter);
 //!     }
 //! }
 //! ```

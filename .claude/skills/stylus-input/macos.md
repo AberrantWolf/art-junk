@@ -1,11 +1,11 @@
 ---
 name: stylus-input-macos
-description: macOS pen/stylus backend for aj-stylus. Reference implementation — already shipped. Document what exists so other platforms can mirror its shape.
+description: macOS pen/stylus backend for stylus-junk. Reference implementation — already shipped. Document what exists so other platforms can mirror its shape.
 ---
 
 # macOS stylus input — reference implementation
 
-**Status: shipped.** See `crates/aj-stylus/src/macos_tablet.rs` (backend) and the `handle_mac_raw` / `handle_mac_proximity` / `on_focus_lost` paths in `crates/aj-stylus/src/adapter.rs` (adapter integration).
+**Status: shipped.** See `crates/stylus-junk/src/macos_tablet.rs` (backend) and the `handle_mac_raw` / `handle_mac_proximity` / `on_focus_lost` paths in `crates/stylus-junk/src/adapter.rs` (adapter integration).
 
 This file documents *why* the macOS code looks the way it does, so the same patterns can be copied to other platforms.
 
@@ -123,7 +123,7 @@ Wacom Intuos / Cintiq via Wacom's macOS driver. Apple Pencil via Sidecar not tes
 - [NSApplicationDidResignActiveNotification](https://developer.apple.com/documentation/appkit/nsapplication/1428705-didresignactivenotification)
 - IOKit tablet capability mask bits: `<IOKit/hidsystem/IOLLEvent.h>` in the macOS SDK (see Apple Open Source: `IOHIDSystem`)
 - [`objc2-app-kit` on docs.rs](https://docs.rs/objc2-app-kit/)
-- Internal: `crates/aj-stylus/src/macos_tablet.rs`, `crates/aj-stylus/src/adapter.rs` — `handle_mac_raw`, `handle_mac_proximity`, `on_focus_lost`.
+- Internal: `crates/stylus-junk/src/macos_tablet.rs`, `crates/stylus-junk/src/adapter.rs` — `handle_mac_raw`, `handle_mac_proximity`, `on_focus_lost`.
 
 ## What other platforms should copy
 

@@ -3,7 +3,7 @@
 //! pulls these in via `use super::super::tests_common::*;` (or through the
 //! `pub(crate) use` re-export in `mod.rs`).
 
-use aj_core::{Sample, ToolCaps};
+use crate::{Sample, ToolCaps};
 
 use super::StylusAdapter;
 use crate::{Phase, StylusEvent};

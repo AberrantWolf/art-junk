@@ -6,13 +6,12 @@
 
 use std::time::Duration;
 
-use aj_core::{PointerId, Sample, StylusButtons, Tilt, ToolCaps, ToolKind};
-use kurbo::Point;
-
 use super::{OPTIMISTIC_PEN_CAPS, PlatformTimestampAnchor, StylusAdapter, alloc_pointer_id};
-use crate::{Phase, StylusEvent};
+use crate::{
+    Phase, Point, PointerId, Sample, StylusButtons, StylusEvent, Tilt, ToolCaps, ToolKind,
+};
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(all(feature = "android", any(target_os = "android", test)))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AndroidSourcePhase {
     Down,
@@ -29,7 +28,7 @@ pub(crate) enum AndroidSourcePhase {
 /// matching Android's native units; the adapter decomposes them via
 /// `android_tilt_to_xy_deg` so component tilt is available on the
 /// emitted `Sample`.
-#[cfg(any(target_os = "android", test))]
+#[cfg(all(feature = "android", any(target_os = "android", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct AndroidRawSample {
     pub position_physical_px: Point,
@@ -54,7 +53,7 @@ pub(crate) struct AndroidRawSample {
     pub source_phase: AndroidSourcePhase,
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(all(feature = "android", any(target_os = "android", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct AndroidProximitySample {
     pub pointer_id: i32,
@@ -67,7 +66,7 @@ pub(crate) struct AndroidProximitySample {
 /// component tilts on the view's X and Y axes. Returns degrees, each
 /// bounded by `±90`. Per the skill doc, the tilt→x/y mapping uses
 /// `sin/cos(orientation)` weighting of the magnitude.
-#[cfg(any(target_os = "android", test))]
+#[cfg(all(feature = "android", any(target_os = "android", test)))]
 pub(crate) fn android_tilt_to_xy_deg(tilt_rad: f32, orientation_rad: f32) -> (f32, f32) {
     let tilt_x = tilt_rad * orientation_rad.sin();
     let tilt_y = tilt_rad * orientation_rad.cos();
@@ -75,7 +74,7 @@ pub(crate) fn android_tilt_to_xy_deg(tilt_rad: f32, orientation_rad: f32) -> (f3
 }
 
 impl StylusAdapter {
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(all(feature = "android", any(target_os = "android", test)))]
     pub(crate) fn handle_android_raw(&mut self, raw: AndroidRawSample) {
         let ts = PlatformTimestampAnchor::translate_or_anchor(
             &mut self.android_anchor,
@@ -135,7 +134,7 @@ impl StylusAdapter {
         }
     }
 
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(all(feature = "android", any(target_os = "android", test)))]
     pub(crate) fn handle_android_proximity(&mut self, prox: AndroidProximitySample) {
         if !prox.is_entering
             && let Some(pid) = self.android_pointers.remove(&prox.pointer_id)
@@ -156,7 +155,7 @@ impl StylusAdapter {
     }
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(all(feature = "android", any(target_os = "android", test)))]
 fn build_android_sample(
     raw: &AndroidRawSample,
     timestamp: Duration,
@@ -186,8 +185,7 @@ fn build_android_sample(
 
 #[cfg(test)]
 mod tests {
-    use aj_core::{SampleClass, StylusButtons, ToolKind};
-    use kurbo::Point;
+    use crate::{Point, SampleClass, StylusButtons, ToolKind};
 
     use super::super::OPTIMISTIC_PEN_CAPS;
     use super::super::tests_common::{adapter, drained, expect_sample};

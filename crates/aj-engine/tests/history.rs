@@ -9,7 +9,7 @@ use aj_core::{
 use aj_engine::{Command, EngineState, apply};
 
 fn sample_at(x: f64, y: f64) -> Sample {
-    Sample::mouse(Point::new(x, y), Duration::ZERO, PointerId::MOUSE)
+    Sample::mouse(Point::new(x, y).into(), Duration::ZERO, PointerId::MOUSE)
 }
 
 fn draw_one(state: &mut EngineState, id: StrokeId) {

@@ -1,57 +1,76 @@
-//! Cross-platform stylus input abstraction for art-junk.
+//! Cross-platform stylus / pen input and palm-rejection adapter.
 //!
-//! This crate owns the wire-level input protocol (`StylusEvent`, `Phase`) and a
-//! `StylusAdapter` that translates winit events into that protocol. Stored sample
-//! data (`Sample`, `ToolCaps`, `PointerId`, …) lives in `aj-core` so committed
-//! strokes don't carry adapter-session types.
+//! This crate owns the wire-level input protocol (`StylusEvent`, `Phase`) plus
+//! a `StylusAdapter` that translates platform input into that protocol. Under
+//! `feature = "winit"` (default in this workspace), a convenience shim accepts
+//! winit events directly; without the feature, consumers feed the adapter's
+//! primitive methods (`on_cursor_moved`, `on_mouse_button`, `on_touch`) from
+//! whatever event source they use.
 //!
-//! The adapter is buffered: one winit event can emit zero or more stylus events
-//! (multi-touch, future coalesced-history APIs). Consumers call `on_window_event`
-//! and then `drain` in sequence.
+//! The adapter is buffered: one input event can emit zero or more stylus
+//! events (multi-touch, future coalesced-history APIs). Consumers call the
+//! event methods and then `drain` in sequence.
 
 mod adapter;
+mod geom;
+mod input;
 
-#[cfg(target_os = "macos")]
+#[cfg(feature = "kurbo")]
+mod kurbo_interop;
+
+#[cfg(feature = "winit")]
+mod winit_shim;
+
+pub use adapter::{ButtonState, MouseButton, TouchEvent, TouchPhase};
+pub use geom::{Point, Size};
+pub use input::{
+    PointerId, Sample, SampleClass, SampleRevision, StylusButtons, Tilt, ToolCaps, ToolKind,
+};
+
+#[cfg(all(feature = "mac", target_os = "macos"))]
 mod macos_tablet;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "wayland", target_os = "linux"))]
 mod linux_wayland_tablet;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "x11", target_os = "linux"))]
 mod linux_x11_tablet;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "windows", target_os = "windows"))]
 mod windows_tablet;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
 mod web_pointer;
 
-#[cfg(target_os = "ios")]
+#[cfg(all(feature = "ios", target_os = "ios"))]
 mod ios_touch;
 
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "android", target_os = "android"))]
 mod android_motion;
 
 pub use adapter::StylusAdapter;
-#[cfg(target_os = "android")]
-pub use android_motion::{AndroidMotionEventStub, handle_android_motion};
-#[cfg(target_os = "ios")]
-pub use ios_touch::{IosStylusBackend, IosStylusInstallError, install as install_ios};
-#[cfg(target_os = "linux")]
-pub use linux_wayland_tablet::{WaylandTabletBackend, WaylandTabletInstallError};
-#[cfg(target_os = "linux")]
-pub use linux_x11_tablet::{X11TabletBackend, X11TabletInstallError};
-#[cfg(target_os = "macos")]
-pub use macos_tablet::{MacTabletBackend, MacTabletInstallError};
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use objc2::MainThreadMarker;
-#[cfg(target_arch = "wasm32")]
-pub use web_pointer::{WebStylusAttachError, WebStylusBridge, attach as attach_web};
-#[cfg(target_os = "windows")]
-pub use windows_tablet::{WindowsTabletBackend, WindowsTabletInstallError};
 
-use aj_core::{PointerId, Sample, SampleRevision, ToolCaps};
-use kurbo::Point;
+#[cfg(feature = "winit")]
+pub use ::winit;
+#[cfg(all(feature = "android", target_os = "android"))]
+pub use android_motion::{AndroidMotionEventStub, handle_android_motion};
+#[cfg(all(feature = "ios", target_os = "ios"))]
+pub use ios_touch::{IosStylusBackend, IosStylusInstallError, install as install_ios};
+#[cfg(all(feature = "wayland", target_os = "linux"))]
+pub use linux_wayland_tablet::{WaylandTabletBackend, WaylandTabletInstallError};
+#[cfg(all(feature = "x11", target_os = "linux"))]
+pub use linux_x11_tablet::{X11TabletBackend, X11TabletInstallError};
+#[cfg(all(feature = "mac", target_os = "macos"))]
+pub use macos_tablet::{MacTabletBackend, MacTabletInstallError};
+#[cfg(any(
+    all(feature = "mac", target_os = "macos"),
+    all(feature = "ios", target_os = "ios")
+))]
+pub use objc2::MainThreadMarker;
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+pub use web_pointer::{WebStylusAttachError, WebStylusBridge, attach as attach_web};
+#[cfg(all(feature = "windows", target_os = "windows"))]
+pub use windows_tablet::{WindowsTabletBackend, WindowsTabletInstallError};
 
 /// Which transition a `StylusEvent::Sample` represents. Lives here rather than
 /// on `Sample` so stored strokes (which are always mid-stroke moves) don't

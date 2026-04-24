@@ -1,6 +1,6 @@
 ---
 name: stylus-input-ios
-description: iOS pen/stylus backend for aj-stylus using UITouch + UIEvent coalesced/predicted, UIPencilInteraction, and UIHoverGestureRecognizer. Overlay UIView subclass above winit's view.
+description: iOS pen/stylus backend for stylus-junk using UITouch + UIEvent coalesced/predicted, UIPencilInteraction, and UIHoverGestureRecognizer. Overlay UIView subclass above winit's view.
 ---
 
 # iOS stylus input
@@ -163,7 +163,7 @@ Register for `UIApplicationWillResignActiveNotification` and `UIApplicationDidEn
 
 ## Minimum viable implementation — step list
 
-1. Add `aj-stylus/src/ios_touch.rs` under `#[cfg(target_os = "ios")]`. Define `IosTouchRawSample`, `IosTouchProximitySample`, `IosPencilInteractionEvent`.
+1. Add `stylus-junk/src/ios_touch.rs` under `#[cfg(target_os = "ios")]`. Define `IosTouchRawSample`, `IosTouchProximitySample`, `IosPencilInteractionEvent`.
 2. Adapter entry points `handle_ios_raw`, `handle_ios_proximity`, `handle_ios_estimated_update`, `handle_ios_pencil_interaction`.
 3. Write `AjStylusView: UIView` via `define_class!`. Override `hitTest` to pass-through non-pencil.
 4. In `touchesBegan/Moved/Ended/Cancelled`: iterate `coalescedTouches` (real) then `predictedTouches` (Predicted class). For each `.pencil` touch, build `IosTouchRawSample`.
@@ -174,7 +174,7 @@ Register for `UIApplicationWillResignActiveNotification` and `UIApplicationDidEn
 9. Notification observers: `UIApplicationWillResignActive`, `UIApplicationDidEnterBackground` → `adapter.on_focus_lost()`.
 10. RAII: `IosStylusBackend` holds the view (retained), hover recognizer, pencil interaction, notification tokens. Drop removes them. Mirror `MacTabletBackend` shape.
 11. Plumb backend install into `aj-app`'s iOS entry (after winit `Resumed`, acquire `ui_view` from raw handle).
-12. Tests: `aj-stylus/tests/ios_adapter.rs` — drive `handle_ios_raw` and `handle_ios_estimated_update` with hand-built samples. Zero UIKit.
+12. Tests: `stylus-junk/tests/ios_adapter.rs` — drive `handle_ios_raw` and `handle_ios_estimated_update` with hand-built samples. Zero UIKit.
 
 ## Testing
 

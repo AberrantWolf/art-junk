@@ -1,6 +1,6 @@
 ---
 name: stylus-input-web
-description: Web (WASM) pen/stylus backend for aj-stylus via Pointer Events on the canvas element, with getCoalescedEvents / getPredictedEvents and touch-action none.
+description: Web (WASM) pen/stylus backend for stylus-junk via Pointer Events on the canvas element, with getCoalescedEvents / getPredictedEvents and touch-action none.
 ---
 
 # Web stylus input
@@ -218,7 +218,7 @@ pub fn attach(canvas: &HtmlCanvasElement, adapter: Rc<RefCell<StylusAdapter>>) -
 
 ## Minimum viable implementation
 
-1. Add `aj-stylus/src/platform/web.rs` under `#[cfg(target_arch = "wasm32")]`. `web-sys` features per above.
+1. Add `stylus-junk/src/platform/web.rs` under `#[cfg(target_arch = "wasm32")]`. `web-sys` features per above.
 2. Define `WebRawSample` / `WebProximitySample` and adapter entry points `handle_web_raw` / `handle_web_proximity`.
 3. `pub fn attach(canvas: &HtmlCanvasElement, adapter: Rc<RefCell<StylusAdapter>>) -> WebStylusBridge`.
 4. Apply CSS in §"CSS" via `canvas.style().set_css_text(...)` at attach time, or ship a stylesheet for host apps.

@@ -9,10 +9,9 @@
 
 use std::time::Duration;
 
-use aj_core::{
-    PointerId, Sample, SampleClass, SampleRevision, StylusButtons, Tilt, ToolCaps, ToolKind,
+use crate::{
+    Point, PointerId, Sample, SampleClass, SampleRevision, StylusButtons, Tilt, ToolCaps, ToolKind,
 };
-use kurbo::Point;
 
 use super::{
     OPTIMISTIC_PEN_CAPS, PenState, PlatformTimestampAnchor, StylusAdapter, alloc_pointer_id,
@@ -231,14 +230,16 @@ fn build_pen_sample(
 
 #[cfg(test)]
 mod tests {
-    use aj_core::{SampleClass, StylusButtons, ToolCaps, ToolKind};
-    use kurbo::Point;
-    use winit::dpi::PhysicalPosition;
-    use winit::event::{DeviceId, MouseButton, Touch, TouchPhase, WindowEvent};
+    use crate::{Point, SampleClass, StylusButtons, ToolCaps, ToolKind};
 
     use super::super::tests_common::{adapter, drained, expect_sample};
     use super::*;
     use crate::{Phase, StylusEvent};
+
+    #[cfg(feature = "winit")]
+    use winit::dpi::PhysicalPosition;
+    #[cfg(feature = "winit")]
+    use winit::event::{DeviceId, MouseButton, Touch, TouchPhase, WindowEvent};
 
     fn raw(
         device_id: u32,
@@ -400,6 +401,7 @@ mod tests {
         assert!(sample.buttons.contains(StylusButtons::INVERTED));
     }
 
+    #[cfg(feature = "winit")]
     #[test]
     fn active_pen_suppresses_winit_mouse_events() {
         use winit::event::{ElementState, MouseButton};
@@ -439,6 +441,7 @@ mod tests {
         assert!(a.pending_estimated.is_empty());
     }
 
+    #[cfg(feature = "winit")]
     #[test]
     fn focus_loss_cancels_mouse_and_touches() {
         let mut a = adapter();

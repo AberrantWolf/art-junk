@@ -85,10 +85,11 @@ pub(crate) fn tessellate_stroke(stroke: &Stroke, world_to_screen: Affine) -> Bez
             continue;
         }
 
-        let p0 = if i == 0 { s_a.position } else { samples[i - 1].position };
-        let p3 = if i + 2 >= samples.len() { s_b.position } else { samples[i + 2].position };
+        let p0: Point = if i == 0 { s_a.position } else { samples[i - 1].position }.into();
+        let p3: Point =
+            if i + 2 >= samples.len() { s_b.position } else { samples[i + 2].position }.into();
 
-        let seg = centripetal_catmull_rom(p0, s_a.position, s_b.position, p3);
+        let seg = centripetal_catmull_rom(p0, s_a.position.into(), s_b.position.into(), p3);
         let len = seg.arclen(world_step * ARCLEN_ACCURACY_FACTOR);
         let n_steps = ((len / world_step).ceil() as usize).max(1);
 
@@ -151,10 +152,16 @@ pub(crate) fn tessellate_stroke(stroke: &Stroke, world_to_screen: Affine) -> Bez
     // faces away from the last segment.
     let first_half = half_width_at_sample(&samples[0], stroke.brush);
     let last_half = half_width_at_sample(&samples[samples.len() - 1], stroke.brush);
-    append_round_cap(&mut path, samples[0].position, -first_tangent, first_half, screen_scale);
     append_round_cap(
         &mut path,
-        samples[samples.len() - 1].position,
+        samples[0].position.into(),
+        -first_tangent,
+        first_half,
+        screen_scale,
+    );
+    append_round_cap(
+        &mut path,
+        samples[samples.len() - 1].position.into(),
         last_tangent,
         last_half,
         screen_scale,
@@ -165,7 +172,7 @@ pub(crate) fn tessellate_stroke(stroke: &Stroke, world_to_screen: Affine) -> Bez
 
 fn single_sample_disc(sample: &Sample, brush: BrushParams, screen_scale: f64) -> BezPath {
     let radius = f64::from(half_width_at_sample(sample, brush));
-    disc_path(sample.position, radius, screen_scale)
+    disc_path(sample.position.into(), radius, screen_scale)
 }
 
 fn half_width_at_sample(sample: &Sample, brush: BrushParams) -> f32 {
@@ -267,7 +274,8 @@ mod tests {
         let samples = points
             .iter()
             .map(|&(x, y, p)| {
-                let mut s = Sample::mouse(Point::new(x, y), Duration::ZERO, PointerId::MOUSE);
+                let mut s =
+                    Sample::mouse(Point::new(x, y).into(), Duration::ZERO, PointerId::MOUSE);
                 s.pressure = p;
                 s
             })

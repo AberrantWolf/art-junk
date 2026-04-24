@@ -4,7 +4,7 @@
 sequenceDiagram
   participant UI as winit event loop (aj-app)
   participant Chr as egui chrome (aj-app)
-  participant Sty as StylusAdapter (aj-stylus)
+  participant Sty as StylusAdapter (stylus-junk)
   participant Act as ActionTable (aj-app)
   participant VP as Viewport (aj-app)
   participant Eng as aj-engine actor thread
@@ -39,7 +39,7 @@ sequenceDiagram
   app's internal `StylusEvent` stream. It owns `PointerId` allocation, mouse /
   touch / pen state, and hosts platform backends through a `pub(crate)` seam
   (`handle_mac_raw` / `handle_mac_proximity` / `on_focus_lost`). macOS pen data
-  arrives via the `MacTabletBackend` in `aj-stylus::macos_tablet`, which
+  arrives via the `MacTabletBackend` in `stylus-junk::macos_tablet`, which
   installs an `NSEvent` local monitor and an `NSApplicationDidResignActive`
   observer; future iOS / Windows / Android backends will plug into the same
   seam. Adapter output is screen-space — world-space conversion stays in

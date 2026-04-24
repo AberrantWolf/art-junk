@@ -31,8 +31,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use aj_core::{Tilt, ToolCaps, ToolKind};
-use kurbo::Point;
+use crate::{Point, Tilt, ToolCaps, ToolKind};
 use raw_window_handle::{RawWindowHandle, XcbWindowHandle, XlibWindowHandle};
 use x11rb::connection::Connection;
 use x11rb::errors::{ConnectError, ConnectionError, ReplyError};
@@ -107,7 +106,7 @@ impl X11TabletBackend {
         let pump_conn = Arc::clone(&conn);
         let pump_running = Arc::clone(&running);
         let pump = std::thread::Builder::new()
-            .name("aj-stylus-x11-pump".into())
+            .name("stylus-junk-x11-pump".into())
             .spawn(move || {
                 pump_loop(pump_conn, pump_running, atoms, devices, adapter, window);
             })

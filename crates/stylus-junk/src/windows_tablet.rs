@@ -30,8 +30,7 @@ use std::mem::MaybeUninit;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use aj_core::{ToolCaps, ToolKind};
-use kurbo::Point;
+use crate::{Point, ToolCaps, ToolKind};
 
 use crate::StylusAdapter;
 use crate::adapter::{WindowsPointerPhase, WindowsProximitySample, WindowsRawSample};
@@ -297,7 +296,7 @@ fn emit_pen_info(state: &mut SubclassState, hwnd: HWND, msg: u32, info: &POINTER
     let pressure = (info.pressure as f32 / 1024.0).clamp(0.0, 1.0);
 
     // Tilt/rotation valid only when penMask says so; otherwise None.
-    let tilt = Some(aj_core::Tilt { x_deg: info.tiltX as f32, y_deg: info.tiltY as f32 });
+    let tilt = Some(crate::Tilt { x_deg: info.tiltX as f32, y_deg: info.tiltY as f32 });
     let twist_deg = Some(info.rotation as f32);
 
     // Fold PEN_FLAG_* bits into the adapter's platform-agnostic mask.

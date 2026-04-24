@@ -1,6 +1,6 @@
 ---
 name: stylus-input-android
-description: Android pen/stylus backend for aj-stylus via MotionEvent through the android-activity crate. Historical samples for high-rate, optional Jetpack motion prediction, tilt+orientation → component tilt.
+description: Android pen/stylus backend for stylus-junk via MotionEvent through the android-activity crate. Historical samples for high-rate, optional Jetpack motion prediction, tilt+orientation → component tilt.
 ---
 
 # Android stylus input
@@ -115,7 +115,7 @@ Winit's Android backend runs on the `android-activity` crate (`game-activity` fl
 Approach (symmetric to the NSEvent monitor on macOS): read raw `MotionEvent` yourself from the `android-activity` app handle.
 
 ```rust
-// aj-stylus/src/platform/android.rs
+// stylus-junk/src/platform/android.rs
 use android_activity::{AndroidApp, InputStatus};
 use android_activity::input::{InputEvent, MotionEvent};
 
@@ -170,7 +170,7 @@ ChromeOS Android apps in ARCVM: same MotionEvent path; tilt and pressure support
 
 ## Minimum viable implementation
 
-1. Add `aj-stylus/src/platform/android.rs` under `#[cfg(target_os = "android")]`. Deps: `ndk = "0.9"`, `android-activity = { version = "0.6", features = ["game-activity"] }`, `jni = "0.21"`.
+1. Add `stylus-junk/src/platform/android.rs` under `#[cfg(target_os = "android")]`. Deps: `ndk = "0.9"`, `android-activity = { version = "0.6", features = ["game-activity"] }`, `jni = "0.21"`.
 2. Define `AndroidRawSample`, `AndroidProximitySample`, adapter entry points `handle_android_raw` / `handle_android_proximity`.
 3. Wire installer: `pub fn install_android(app: &AndroidApp, adapter: Rc<RefCell<StylusAdapter>>)`.
 4. In winit pump, drain `android_app.input_events_iter()`. For each `InputEvent::Motion(m)`, call `handle_motion`.
@@ -182,7 +182,7 @@ ChromeOS Android apps in ARCVM: same MotionEvent path; tilt and pressure support
 10. Palm rejection: drop `TOOL_TYPE_FINGER` while any `TOOL_TYPE_STYLUS` down/hovering; 250 ms cooldown.
 11. Prediction (feature-gated): `MotionEventPredictor` via JNI; predicted samples as `SampleClass::Predicted`.
 12. `Surface.setFrameRate(120, FIXED_SOURCE)` JNI call on surface-created, API 30+ only.
-13. Tests: `aj-stylus/tests/android_adapter.rs` with pure-Rust `handle_android_raw` fixtures.
+13. Tests: `stylus-junk/tests/android_adapter.rs` with pure-Rust `handle_android_raw` fixtures.
 
 ## Testing
 

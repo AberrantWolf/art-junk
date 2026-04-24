@@ -7,15 +7,14 @@
 
 use std::time::Duration;
 
-use aj_core::{PointerId, Sample, StylusButtons, Tilt, ToolCaps, ToolKind};
-use kurbo::Point;
+use crate::{Point, PointerId, Sample, StylusButtons, Tilt, ToolCaps, ToolKind};
 
 use super::{
     OPTIMISTIC_PEN_CAPS, PenState, PlatformTimestampAnchor, StylusAdapter, alloc_pointer_id,
 };
 use crate::{Phase, StylusEvent};
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(all(feature = "windows", any(target_os = "windows", test)))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowsPointerPhase {
     Down,
@@ -33,7 +32,7 @@ pub(crate) enum WindowsPointerPhase {
 /// `0..=1024`), tilt already in degrees (`-90..=90`), rotation already in
 /// degrees (`0..=359`). `tangential_pressure` is always `None` — the Windows
 /// Pointer API has no corresponding field.
-#[cfg(any(target_os = "windows", test))]
+#[cfg(all(feature = "windows", any(target_os = "windows", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WindowsRawSample {
     pub position_physical_px: Point,
@@ -51,7 +50,7 @@ pub(crate) struct WindowsRawSample {
     pub source_phase: WindowsPointerPhase,
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(all(feature = "windows", any(target_os = "windows", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WindowsProximitySample {
     pub device_id: u32,
@@ -61,7 +60,7 @@ pub(crate) struct WindowsProximitySample {
 }
 
 impl StylusAdapter {
-    #[cfg(any(target_os = "windows", test))]
+    #[cfg(all(feature = "windows", any(target_os = "windows", test)))]
     pub(crate) fn handle_windows_raw(&mut self, raw: WindowsRawSample) {
         let ts = PlatformTimestampAnchor::translate_or_anchor(
             &mut self.windows_anchor,
@@ -128,7 +127,7 @@ impl StylusAdapter {
         }
     }
 
-    #[cfg(any(target_os = "windows", test))]
+    #[cfg(all(feature = "windows", any(target_os = "windows", test)))]
     pub(crate) fn handle_windows_proximity(&mut self, prox: WindowsProximitySample) {
         if prox.is_entering {
             let entry = self.pens.entry(prox.device_id).or_insert(PenState {
@@ -164,7 +163,7 @@ impl StylusAdapter {
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(all(feature = "windows", any(target_os = "windows", test)))]
 fn build_windows_sample(
     raw: &WindowsRawSample,
     timestamp: Duration,
@@ -195,8 +194,7 @@ fn build_windows_sample(
 
 #[cfg(test)]
 mod tests {
-    use aj_core::{PointerId, SampleClass, StylusButtons, Tilt, ToolCaps, ToolKind};
-    use kurbo::Point;
+    use crate::{Point, PointerId, SampleClass, StylusButtons, Tilt, ToolCaps, ToolKind};
 
     use super::super::OPTIMISTIC_PEN_CAPS;
     use super::super::tests_common::{adapter, drained, expect_sample};

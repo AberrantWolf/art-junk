@@ -24,7 +24,7 @@ Not optional boilerplate. If a section is genuinely N/A for a small change, stat
 | 2D rendering | `vello` + `kurbo` + `peniko` (Linebender ecosystem) |
 | Text | `parley` + `swash` — deferred; v1 is labels only |
 | UI chrome | `egui` at first pass (replace/theme later; drawing surface stays raw Vello) |
-| Stylus / palm rejection | home-grown `aj-stylus` crate |
+| Stylus / palm rejection | home-grown `stylus-junk` crate (cross-workspace-publishable; platforms, winit, and kurbo are all feature-gated) |
 | Serialization | `serde` → CBOR binary (`.aj`) + RON ASCII (`.ajr`), converter CLI |
 | Concurrency | `std::thread` + `crossbeam-channel` + `rayon` + `arc-swap` + `pollster`. **No `tokio`.** |
 | Testing | `cargo test`, `insta` snapshots, headless wgpu render-to-texture for goldens, `dssim` perceptual diff |
@@ -36,7 +36,7 @@ crates/
   aj-core/     # data types, scene graph, serde schema — pure, no threading
   aj-engine/   # actor thread, Command/Event, snapshot publication, task pool
   aj-format/   # (de)serialization, I/O adapters
-  aj-stylus/   # cross-platform stylus + palm-rejection abstraction
+  stylus-junk/ # cross-platform stylus + palm-rejection abstraction (publishable; owns Sample/ToolCaps/…)
   aj-render/   # Vello integration, dirty-tile tracking, consumes SceneSnapshot
   aj-effects/  # scene-graph effect nodes + WGSL passes
   aj-app/      # main binary — wires engine + render + egui UI

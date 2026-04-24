@@ -1,11 +1,11 @@
 ---
 name: stylus-input
-description: Reference for implementing per-platform pen/stylus input backends behind the `aj-stylus` crate's `StylusAdapter` seam. Cross-platform strategy, decision matrix, and links to per-platform details (iOS, Android, Windows, macOS, Linux, Web).
+description: Reference for implementing per-platform pen/stylus input backends behind the `stylus-junk` crate's `StylusAdapter` seam. Cross-platform strategy, decision matrix, and links to per-platform details (iOS, Android, Windows, macOS, Linux, Web).
 ---
 
 # Stylus input — cross-platform reference
 
-`aj-stylus` centralizes pen/touch/mouse logic in a single `StylusAdapter`. Each platform backend translates OS-native events into a small, platform-agnostic shape and calls the adapter. Backends are thin; the adapter owns identity, timestamps, proximity state, estimated/revise cycles, and focus-loss cancellation.
+`stylus-junk` centralizes pen/touch/mouse logic in a single `StylusAdapter`. Each platform backend translates OS-native events into a small, platform-agnostic shape and calls the adapter. Backends are thin; the adapter owns identity, timestamps, proximity state, estimated/revise cycles, and focus-loss cancellation.
 
 This skill is the launchpad. Jump to a platform file for implementation detail.
 
@@ -25,13 +25,13 @@ Every backend produces two kinds of records and feeds them into the adapter on t
 - **`*RawSample`** — one physical sample: position (physical px, client-relative), timestamp (monotonic seconds), pressure (0..=1), tilt (x_deg, y_deg, each -90..=90), twist_deg (0..=360 or signed), tangential_pressure (-1..=1), button_mask, device_id, pointing_device_type, source_phase (Down/Move/Up), origin tag.
 - **`*ProximitySample`** — per-tool: device_id, unique_id (serial if available), pointing_device_type, ToolCaps bitfield, is_entering.
 
-The macOS path in `crates/aj-stylus/src/adapter.rs` uses `MacTabletRawSample` / `MacTabletProximitySample` and entry points `handle_mac_raw` / `handle_mac_proximity` / `on_focus_lost`. Each new platform should mirror this shape:
+The macOS path in `crates/stylus-junk/src/adapter.rs` uses `MacTabletRawSample` / `MacTabletProximitySample` and entry points `handle_mac_raw` / `handle_mac_proximity` / `on_focus_lost`. Each new platform should mirror this shape:
 
 1. Define `<platform>RawSample` and `<platform>ProximitySample` in the adapter crate (`pub(crate)`).
 2. Define `pub(crate) fn handle_<platform>_raw` and `handle_<platform>_proximity` on `StylusAdapter`, following the same Estimated+Revise pattern already in `handle_mac_raw`.
 3. Put OS-specific translation (objc2 / windows-sys / wayland-client / ndk / wasm-bindgen) in a sibling file (`<platform>_tablet.rs`). The adapter stays platform-agnostic.
 
-Don't leak OS types into `aj-stylus::adapter`. The benefit is uniform behavior and testability — the macOS tests drive `handle_mac_raw` directly without any AppKit dependency; each new platform gets the same treatment.
+Don't leak OS types into `stylus-junk::adapter`. The benefit is uniform behavior and testability — the macOS tests drive `handle_mac_raw` directly without any AppKit dependency; each new platform gets the same treatment.
 
 ## What the adapter already handles (do not re-implement in backends)
 
@@ -113,16 +113,16 @@ The existing adapter has macOS-specific fields (`mac_epoch`, `pending_estimated`
 
 ## Testing approach that survives across platforms
 
-The macOS tests in `aj-stylus/src/adapter.rs` drive `handle_mac_raw` and `handle_mac_proximity` directly with pure-Rust fixtures — no AppKit, no device. Every new platform gets the same treatment: `handle_<platform>_raw` is public-in-crate, and tests feed hand-constructed sample streams.
+The macOS tests in `stylus-junk/src/adapter.rs` drive `handle_mac_raw` and `handle_mac_proximity` directly with pure-Rust fixtures — no AppKit, no device. Every new platform gets the same treatment: `handle_<platform>_raw` is public-in-crate, and tests feed hand-constructed sample streams.
 
 Golden-image tests (render a pen stroke from a replayed sample log, `dssim`-compare to committed golden) are the end-to-end check. Record a short stroke from real hardware on each platform we own; replay through the whole stack.
 
 ## Where to start editing code
 
-- `crates/aj-stylus/src/lib.rs` — module registration and public types (`StylusEvent`, `Phase`).
-- `crates/aj-stylus/src/adapter.rs` — platform-agnostic state machine. Extend with `handle_<platform>_*` entry points.
-- `crates/aj-stylus/src/<platform>_tablet.rs` — new, per platform.
-- `crates/aj-stylus/Cargo.toml` — add `[target.'cfg(...)'.dependencies]` for each platform's FFI crates.
+- `crates/stylus-junk/src/lib.rs` — module registration and public types (`StylusEvent`, `Phase`).
+- `crates/stylus-junk/src/adapter.rs` — platform-agnostic state machine. Extend with `handle_<platform>_*` entry points.
+- `crates/stylus-junk/src/<platform>_tablet.rs` — new, per platform.
+- `crates/stylus-junk/Cargo.toml` — add `[target.'cfg(...)'.dependencies]` for each platform's FFI crates.
 - `crates/aj-app/src/main.rs` — install the backend (pass `Rc<RefCell<StylusAdapter>>`, RAII guard stored on the App).
 
 The macOS pair (`macos_tablet.rs` + `adapter.rs::handle_mac_*`) is the reference implementation. Read it before writing a new backend.

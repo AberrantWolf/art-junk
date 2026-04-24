@@ -40,8 +40,7 @@
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use aj_core::{Tilt, ToolCaps, ToolKind};
-use kurbo::Point;
+use crate::{Point, Tilt, ToolCaps, ToolKind};
 use raw_window_handle::WaylandDisplayHandle;
 use wayland_client::backend::Backend;
 use wayland_client::protocol::{wl_registry, wl_seat};
@@ -109,7 +108,7 @@ impl WaylandTabletBackend {
 
         let thread_shutdown = Arc::clone(&shutdown);
         let thread = thread::Builder::new()
-            .name("aj-stylus-wayland-tablet".to_string())
+            .name("stylus-junk-wayland-tablet".to_string())
             .spawn(move || dispatch_loop(queue, state, &thread_shutdown))
             .map_err(WaylandTabletInstallError::ThreadSpawn)?;
 

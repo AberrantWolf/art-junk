@@ -1,6 +1,6 @@
 ---
 name: stylus-input-windows
-description: Windows pen/stylus backend for aj-stylus using the Pointer Input API (WM_POINTER + GetPointerPenInfoHistory). HWND subclassed via SetWindowSubclass to coexist with winit.
+description: Windows pen/stylus backend for stylus-junk using the Pointer Input API (WM_POINTER + GetPointerPenInfoHistory). HWND subclassed via SetWindowSubclass to coexist with winit.
 ---
 
 # Windows stylus input
@@ -191,7 +191,7 @@ Within a pointer session: differentiate hover vs stroke via `POINTER_INFO.pointe
 
 ## Minimum viable implementation
 
-1. Add `aj-stylus/src/platform/windows.rs` under `#[cfg(target_os = "windows")]`. `windows-sys` deps per above.
+1. Add `stylus-junk/src/platform/windows.rs` under `#[cfg(target_os = "windows")]`. `windows-sys` deps per above.
 2. Define `WindowsStylusRawSample` / `WindowsStylusProximitySample` and adapter entry points `handle_windows_raw` / `handle_windows_proximity`.
 3. Public API: `pub fn attach_to_hwnd(hwnd: isize, adapter: Rc<RefCell<StylusAdapter>>) -> WindowsStylusBackend`.
 4. `SetWindowSubclass(hwnd, subclass_proc, SUBCLASS_ID, Box::into_raw(state))`. RAII `Drop` calls `RemoveWindowSubclass`.
@@ -202,12 +202,12 @@ Within a pointer session: differentiate hover vs stroke via `POINTER_INFO.pointe
 9. Proximity: on `WM_POINTERDEVICE{IN,OUTOF}RANGE`, build caps bitfield from `GetPointerDevices` / `POINTER_DEVICE_INFO` (cache per device HANDLE).
 10. Palm rejection: `pen_in_range` gate; swallow `PT_TOUCH` messages and legacy `WM_MOUSE*` while true.
 11. Estimated/Revise: first `WM_POINTERDOWN` sample → `SampleClass::Estimated`; first follow-up with full `PEN_MASK` coverage → `Revise` through existing adapter path.
-12. Tests: `aj-stylus/tests/windows_adapter.rs` driving `handle_windows_raw` with hand-built fixtures.
+12. Tests: `stylus-junk/tests/windows_adapter.rs` driving `handle_windows_raw` with hand-built fixtures.
 
 ## Testing
 
 - No first-party simulator. Real Surface Pen + Surface Slim Pen 2 (MPP 2.0 incl. rotation) is the primary rig. Wacom Intuos MPP pen secondary. Older N-Trig as regression canary.
-- Debug logging gated on `RUST_LOG=aj_stylus::windows=debug`: on `WM_POINTERDEVICECHANGE`, enumerate and log device name + max pressure + mask bits.
+- Debug logging gated on `RUST_LOG=stylus_junk::windows=debug`: on `WM_POINTERDEVICECHANGE`, enumerate and log device name + max pressure + mask bits.
 
 ## References
 

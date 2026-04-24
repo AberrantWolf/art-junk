@@ -12,7 +12,7 @@ description = "Scene-graph data types and domain model for art-junk."
 workspace = true
 
 [dependencies]
+stylus-junk = { workspace = true, features = ["kurbo"] }
 kurbo.workspace = true
 thiserror.workspace = true
-bitflags.workspace = true
 log.workspace = true

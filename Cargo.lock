@@ -53,7 +53,6 @@ dependencies = [
  "aj-core",
  "aj-engine",
  "aj-render",
- "aj-stylus",
  "anyhow",
  "egui",
  "egui-wgpu",
@@ -63,6 +62,7 @@ dependencies = [
  "pollster",
  "strum",
  "strum_macros",
+ "stylus-junk",
  "wgpu",
  "winit",
 ]
@@ -75,9 +75,9 @@ version = "0.1.0"
 name = "aj-core"
 version = "0.1.0"
 dependencies = [
- "bitflags 2.11.1",
  "kurbo",
  "log",
+ "stylus-junk",
  "thiserror 2.0.18",
 ]
 
@@ -107,32 +107,6 @@ dependencies = [
  "anyhow",
  "vello",
  "wgpu",
-]
-
-[[package]]
-name = "aj-stylus"
-version = "0.1.0"
-dependencies = [
- "aj-core",
- "bitflags 2.11.1",
- "block2 0.6.2",
- "js-sys",
- "kurbo",
- "log",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "objc2-ui-kit 0.3.2",
- "raw-window-handle",
- "thiserror 2.0.18",
- "wasm-bindgen",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "web-sys",
- "windows-sys 0.59.0",
- "winit",
- "x11rb",
 ]
 
 [[package]]
@@ -2565,6 +2539,31 @@ dependencies = [
  "quote",
  "rustversion",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "stylus-junk"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.11.1",
+ "block2 0.6.2",
+ "js-sys",
+ "kurbo",
+ "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit 0.3.2",
+ "raw-window-handle",
+ "thiserror 2.0.18",
+ "wasm-bindgen",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "web-sys",
+ "windows-sys 0.59.0",
+ "winit",
+ "x11rb",
 ]
 
 [[package]]

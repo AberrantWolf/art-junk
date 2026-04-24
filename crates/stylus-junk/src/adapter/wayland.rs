@@ -8,15 +8,14 @@
 
 use std::time::Duration;
 
-use aj_core::{PointerId, Sample, StylusButtons, Tilt, ToolCaps, ToolKind};
-use kurbo::Point;
+use crate::{Point, PointerId, Sample, StylusButtons, Tilt, ToolCaps, ToolKind};
 
 use super::{
     OPTIMISTIC_PEN_CAPS, PenState, PlatformTimestampAnchor, StylusAdapter, alloc_pointer_id,
 };
 use crate::{Phase, StylusEvent};
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "wayland", any(target_os = "linux", test)))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WaylandTabletPhase {
     Down,
@@ -29,7 +28,7 @@ pub(crate) enum WaylandTabletPhase {
 /// backend collapses all axis events between two `frame`s into a single
 /// `WaylandRawSample`. Pressure arrives pre-normalized to `0..=1` so the
 /// adapter stays free of Wayland axis-range magic numbers.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "wayland", any(target_os = "linux", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WaylandRawSample {
     pub position_physical_px: Point,
@@ -47,7 +46,7 @@ pub(crate) struct WaylandRawSample {
     pub source_phase: WaylandTabletPhase,
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "wayland", any(target_os = "linux", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WaylandProximitySample {
     pub device_id: u32,
@@ -58,7 +57,7 @@ pub(crate) struct WaylandProximitySample {
 }
 
 impl StylusAdapter {
-    #[cfg(any(target_os = "linux", test))]
+    #[cfg(all(feature = "wayland", any(target_os = "linux", test)))]
     pub(crate) fn handle_wayland_raw(&mut self, raw: WaylandRawSample) {
         let ts = PlatformTimestampAnchor::translate_or_anchor(
             &mut self.wayland_anchor,
@@ -112,7 +111,7 @@ impl StylusAdapter {
         }
     }
 
-    #[cfg(any(target_os = "linux", test))]
+    #[cfg(all(feature = "wayland", any(target_os = "linux", test)))]
     pub(crate) fn handle_wayland_proximity(&mut self, prox: WaylandProximitySample) {
         if prox.is_entering {
             let entry = self.pens.entry(prox.device_id).or_insert(PenState {
@@ -149,7 +148,7 @@ impl StylusAdapter {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "wayland", any(target_os = "linux", test)))]
 fn build_wayland_sample(
     raw: &WaylandRawSample,
     timestamp: Duration,
@@ -182,8 +181,7 @@ fn build_wayland_sample(
 mod tests {
     use std::time::Duration;
 
-    use aj_core::{SampleClass, StylusButtons, ToolCaps, ToolKind};
-    use kurbo::Point;
+    use crate::{Point, SampleClass, StylusButtons, ToolCaps, ToolKind};
 
     use super::super::OPTIMISTIC_PEN_CAPS;
     use super::super::tests_common::{adapter, drained, expect_sample};

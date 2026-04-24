@@ -5,9 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod input;
 
-pub use input::{
-    BrushParams, MAX_WIDTH_MAX, MAX_WIDTH_MIN, PointerId, PressureCurve, Sample, SampleClass,
-    SampleRevision, StylusButtons, Tilt, ToolCaps, ToolKind,
+pub use input::{BrushParams, MAX_WIDTH_MAX, MAX_WIDTH_MIN, PressureCurve};
+// Input-sample types live in `stylus-junk`; re-export so existing aj-core
+// consumers keep working with their current import paths.
+pub use stylus_junk::{
+    PointerId, Sample, SampleClass, SampleRevision, StylusButtons, Tilt, ToolCaps, ToolKind,
 };
 // TODO(f32-migration): stored point coordinates are currently f64 via kurbo. We may
 // want to move to an f32 newtype once `aj-format` defines a persistence schema or
@@ -276,7 +278,7 @@ mod tests {
     use super::*;
 
     fn sample_at(x: f64, y: f64) -> Sample {
-        Sample::mouse(Point::new(x, y), Duration::ZERO, PointerId::MOUSE)
+        Sample::mouse(Point::new(x, y).into(), Duration::ZERO, PointerId::MOUSE)
     }
 
     fn stroke(id: u64, points: &[(f64, f64)]) -> Stroke {
@@ -365,7 +367,7 @@ mod tests {
     }
 
     fn estimated_sample_at(x: f64, y: f64, update_index: u64, pressure: f32) -> Sample {
-        let mut s = Sample::mouse(Point::new(x, y), Duration::ZERO, PointerId::MOUSE);
+        let mut s = Sample::mouse(Point::new(x, y).into(), Duration::ZERO, PointerId::MOUSE);
         s.class = SampleClass::Estimated { update_index };
         s.pressure = pressure;
         s

@@ -26,9 +26,9 @@ use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use aj_core::{Tilt, ToolCaps, ToolKind};
 use block2::RcBlock;
-use kurbo::Point;
+
+use crate::{Point, Tilt, ToolCaps, ToolKind};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};

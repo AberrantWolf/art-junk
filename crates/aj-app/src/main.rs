@@ -11,10 +11,10 @@ use std::sync::Arc;
 use aj_core::{Point, PointerId, Size, StrokeId, Vec2};
 use aj_engine::{Command, Engine};
 use aj_render::Renderer;
-#[cfg(target_os = "macos")]
-use aj_stylus::MacTabletBackend;
-use aj_stylus::{Phase, StylusAdapter, StylusEvent};
 use anyhow::Result;
+#[cfg(target_os = "macos")]
+use stylus_junk::MacTabletBackend;
+use stylus_junk::{Phase, StylusAdapter, StylusEvent};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
@@ -106,7 +106,7 @@ impl App {
         {
             // SAFETY: winit guarantees this method runs on the main thread,
             // which is what `MainThreadMarker::new()` verifies.
-            if let Some(mtm) = aj_stylus::MainThreadMarker::new() {
+            if let Some(mtm) = stylus_junk::MainThreadMarker::new() {
                 match MacTabletBackend::install(self.stylus.clone(), mtm) {
                     Ok(backend) => self.mac_tablet = Some(backend),
                     Err(err) => log::warn!("macOS tablet backend install failed: {err}"),
@@ -459,8 +459,8 @@ impl App {
     }
 
     fn on_sample(&mut self, mut sample: aj_core::Sample, phase: Phase, caps: aj_core::ToolCaps) {
-        let world = self.viewport.screen_to_world(sample.position, self.dpi_scale);
-        sample.position = world;
+        let world = self.viewport.screen_to_world(sample.position.into(), self.dpi_scale);
+        sample.position = world.into();
         let pointer_id = sample.pointer_id;
 
         match phase {

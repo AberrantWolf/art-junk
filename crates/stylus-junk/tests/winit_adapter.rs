@@ -1,7 +1,10 @@
-//! Adapter state-machine tests driven by canned winit events.
+//! Adapter state-machine tests driven by canned winit events. Gated on
+//! `feature = "winit"` so a `--no-default-features` build doesn't try to link
+//! winit just for these tests.
 
-use aj_core::{PointerId, Sample, ToolCaps, ToolKind};
-use aj_stylus::{Phase, StylusAdapter, StylusEvent};
+#![cfg(feature = "winit")]
+
+use stylus_junk::{Phase, PointerId, Sample, StylusAdapter, StylusEvent, ToolCaps, ToolKind};
 use winit::dpi::PhysicalPosition;
 use winit::event::{DeviceId, ElementState, Force, MouseButton, Touch, TouchPhase, WindowEvent};
 

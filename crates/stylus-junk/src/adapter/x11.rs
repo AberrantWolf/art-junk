@@ -6,13 +6,12 @@
 
 use std::time::Duration;
 
-use aj_core::{PointerId, Sample, StylusButtons, Tilt, ToolCaps, ToolKind};
-use kurbo::Point;
+use crate::{Point, PointerId, Sample, StylusButtons, Tilt, ToolCaps, ToolKind};
 
 use super::{OPTIMISTIC_PEN_CAPS, PenState, StylusAdapter, alloc_pointer_id};
 use crate::{Phase, StylusEvent};
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "x11", any(target_os = "linux", test)))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum X11TabletPhase {
     Down,
@@ -26,7 +25,7 @@ pub(crate) enum X11TabletPhase {
 /// belongs in the backend, not the adapter. No `timestamp_secs` because
 /// `XIDeviceEvent.time` is ms since X server start and not monotonic; the
 /// adapter stamps with `Instant::now()` on receipt.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "x11", any(target_os = "linux", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct X11RawSample {
     pub position_physical_px: Point,
@@ -40,7 +39,7 @@ pub(crate) struct X11RawSample {
     pub source_phase: X11TabletPhase,
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "x11", any(target_os = "linux", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct X11ProximitySample {
     pub device_id: u32,
@@ -51,7 +50,7 @@ pub(crate) struct X11ProximitySample {
 }
 
 impl StylusAdapter {
-    #[cfg(any(target_os = "linux", test))]
+    #[cfg(all(feature = "x11", any(target_os = "linux", test)))]
     pub(crate) fn handle_x11_raw(&mut self, raw: X11RawSample) {
         let ts = self.current_duration();
 
@@ -101,7 +100,7 @@ impl StylusAdapter {
         }
     }
 
-    #[cfg(any(target_os = "linux", test))]
+    #[cfg(all(feature = "x11", any(target_os = "linux", test)))]
     pub(crate) fn handle_x11_proximity(&mut self, prox: X11ProximitySample) {
         if prox.is_entering {
             let entry = self.pens.entry(prox.device_id).or_insert(PenState {
@@ -135,7 +134,7 @@ impl StylusAdapter {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "x11", any(target_os = "linux", test)))]
 fn build_x11_pen_sample(
     raw: &X11RawSample,
     timestamp: Duration,
@@ -163,8 +162,7 @@ fn build_x11_pen_sample(
 
 #[cfg(test)]
 mod tests {
-    use aj_core::{SampleClass, StylusButtons, Tilt, ToolCaps, ToolKind};
-    use kurbo::Point;
+    use crate::{Point, SampleClass, StylusButtons, Tilt, ToolCaps, ToolKind};
 
     use super::super::tests_common::{adapter, drained, expect_sample};
     use super::*;

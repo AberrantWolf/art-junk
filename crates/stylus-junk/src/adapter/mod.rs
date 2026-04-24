@@ -40,31 +40,27 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use aj_core::{PointerId, Sample, ToolCaps, ToolKind};
-use kurbo::Point;
-use winit::event::{ElementState, Force, MouseButton, Touch, TouchPhase, WindowEvent};
+use crate::{Phase, Point, PointerId, Sample, StylusEvent, ToolCaps, ToolKind};
 
-use crate::{Phase, StylusEvent};
-
-#[cfg(any(target_os = "macos", test))]
+#[cfg(all(feature = "mac", any(target_os = "macos", test)))]
 pub(crate) mod mac;
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "wayland", any(target_os = "linux", test)))]
 pub(crate) mod wayland;
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(feature = "x11", any(target_os = "linux", test)))]
 pub(crate) mod x11;
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(all(feature = "windows", any(target_os = "windows", test)))]
 pub(crate) mod windows;
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
 pub(crate) mod web;
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(all(feature = "ios", any(target_os = "ios", test)))]
 pub(crate) mod ios;
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(all(feature = "android", any(target_os = "android", test)))]
 pub(crate) mod android;
 
 #[cfg(test)]
@@ -83,35 +79,35 @@ pub struct StylusAdapter {
     /// `update_index` emitted with the original `SampleClass::Estimated`.
     /// Value is the `PointerId` whose stroke owns the estimate.
     pending_estimated: HashMap<u64, PointerId>,
-    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    #[cfg_attr(not(all(feature = "mac", any(target_os = "macos", test))), allow(dead_code))]
     next_update_index: u64,
-    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    #[cfg_attr(not(all(feature = "mac", any(target_os = "macos", test))), allow(dead_code))]
     mac_anchor: Option<PlatformTimestampAnchor>,
-    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+    #[cfg_attr(not(all(feature = "wayland", any(target_os = "linux", test))), allow(dead_code))]
     wayland_anchor: Option<PlatformTimestampAnchor>,
-    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    #[cfg_attr(not(all(feature = "windows", any(target_os = "windows", test))), allow(dead_code))]
     windows_anchor: Option<PlatformTimestampAnchor>,
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
     web_anchor: Option<PlatformTimestampAnchor>,
     /// Per-gesture map from JS `pointerId` (stable only within a single
     /// Pointer-Events gesture) to the adapter's `PointerId`. Down allocates,
     /// Up / Cancel / Leave removes.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
     web_pointers: HashMap<i32, web::WebPointerState>,
-    #[cfg_attr(not(any(target_os = "ios", test)), allow(dead_code))]
+    #[cfg_attr(not(all(feature = "ios", any(target_os = "ios", test))), allow(dead_code))]
     ios_anchor: Option<PlatformTimestampAnchor>,
     /// Per-iOS-touch map from the `UITouch` identity (hashed) to the
     /// adapter's `PointerId`. iOS pencil gestures have their own id space
     /// that survives coalesced/predicted replays of the same touch.
-    #[cfg(any(target_os = "ios", test))]
+    #[cfg(all(feature = "ios", any(target_os = "ios", test)))]
     ios_pointers: HashMap<u64, PointerId>,
-    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+    #[cfg_attr(not(all(feature = "android", any(target_os = "android", test))), allow(dead_code))]
     android_anchor: Option<PlatformTimestampAnchor>,
     /// Map from Android `MotionEvent` pointer id (distinct per pointer in
     /// a multi-touch gesture) to the adapter's `PointerId`. Android reuses
     /// pointer ids within a gesture; adapter allocates fresh on first
     /// sight, clears on Up/Cancel.
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(all(feature = "android", any(target_os = "android", test)))]
     android_pointers: HashMap<i32, PointerId>,
 }
 
@@ -138,13 +134,16 @@ pub(crate) struct PenState {
 /// platform timeline.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PlatformTimestampAnchor {
+    #[allow(dead_code)] // read only when a platform backend is enabled
     first_platform_secs: f64,
+    #[allow(dead_code)]
     adapter_duration_at_first: Duration,
 }
 
 impl PlatformTimestampAnchor {
     /// Translate `platform_secs` to adapter-timeline `Duration`, anchoring on
     /// the first call if `slot` is empty. `adapter_epoch` is `StylusAdapter::epoch`.
+    #[allow(dead_code)] // called only by platform backends
     pub(crate) fn translate_or_anchor(
         slot: &mut Option<Self>,
         platform_secs: f64,
@@ -163,6 +162,7 @@ impl PlatformTimestampAnchor {
 /// typical if the app launches with pen already hovering. A cursor-puck would
 /// over-claim tilt/twist under this default; survivable, and proximity
 /// corrects it as soon as the pen moves out and back in.
+#[allow(dead_code)] // used only by platform backends
 pub(crate) const OPTIMISTIC_PEN_CAPS: ToolCaps = ToolCaps::PRESSURE
     .union(ToolCaps::TILT)
     .union(ToolCaps::TWIST)
@@ -186,15 +186,15 @@ impl StylusAdapter {
             mac_anchor: None,
             wayland_anchor: None,
             windows_anchor: None,
-            #[cfg(any(target_arch = "wasm32", test))]
+            #[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
             web_anchor: None,
-            #[cfg(any(target_arch = "wasm32", test))]
+            #[cfg(all(feature = "web", any(target_arch = "wasm32", test)))]
             web_pointers: HashMap::new(),
             ios_anchor: None,
-            #[cfg(any(target_os = "ios", test))]
+            #[cfg(all(feature = "ios", any(target_os = "ios", test)))]
             ios_pointers: HashMap::new(),
             android_anchor: None,
-            #[cfg(any(target_os = "android", test))]
+            #[cfg(all(feature = "android", any(target_os = "android", test)))]
             android_pointers: HashMap::new(),
         }
     }
@@ -207,55 +207,90 @@ impl StylusAdapter {
         self.mouse_down || !self.touches.is_empty() || self.active_pen_pointer.is_some()
     }
 
-    /// Translate one winit event into zero or more queued `StylusEvent`s.
-    pub fn on_window_event(&mut self, event: &WindowEvent) {
-        // If a pen is actively driving the pointer, the corresponding mouse
-        // events winit emits are duplicates of the richer pen samples we've
-        // already queued — drop them. Still track cursor position because
-        // we don't want the winit-path's view of it to go stale if the pen
-        // stops driving and the mouse resumes.
+    /// Most recent cursor position fed into `on_cursor_moved` (or synthesized
+    /// from a winit `CursorMoved` via the `winit` feature). The winit shim
+    /// uses this to resolve the position of a `MouseInput` event when winit
+    /// didn't deliver a paired `CursorMoved`; external consumers rarely need
+    /// it directly.
+    #[must_use]
+    pub fn last_cursor_position(&self) -> Option<Point> {
+        self.cursor_position
+    }
+
+    /// Cursor moved to `position` (in screen-space physical pixels). Emits a
+    /// `Move` sample if the mouse button is currently down; otherwise just
+    /// tracks the position so a subsequent `on_mouse_button` or
+    /// `on_focus_lost` has something to work with.
+    pub fn on_cursor_moved(&mut self, position: Point) {
         if self.active_pen_pointer.is_some() {
-            if let WindowEvent::CursorMoved { position, .. } = event {
-                self.cursor_position = Some(Point::new(position.x, position.y));
-            }
+            self.cursor_position = Some(position);
             return;
         }
-
-        match event {
-            WindowEvent::CursorMoved { position, .. } => {
-                let p = Point::new(position.x, position.y);
-                self.cursor_position = Some(p);
-                if self.mouse_down {
-                    self.emit_mouse(p, Phase::Move);
-                }
-            }
-            WindowEvent::MouseInput { button: MouseButton::Left, state, .. } => match state {
-                ElementState::Pressed => {
-                    if !self.mouse_down
-                        && let Some(p) = self.cursor_position
-                    {
-                        self.mouse_down = true;
-                        self.emit_mouse(p, Phase::Down);
-                    }
-                }
-                ElementState::Released => {
-                    if self.mouse_down {
-                        self.mouse_down = false;
-                        let p = self.cursor_position.unwrap_or(Point::ZERO);
-                        self.emit_mouse(p, Phase::Up);
-                    }
-                }
-            },
-            // CursorLeft is intentionally a no-op: if the user drags off the
-            // window mid-stroke, we want the stroke to keep going until the real
-            // Released event arrives. All desktop OSes deliver a Released event
-            // for the eventual button-up even when the cursor is outside the
-            // window, via the implicit capture set up by the Pressed on entry.
-            WindowEvent::Touch(touch) => {
-                self.handle_touch(touch);
-            }
-            _ => {}
+        self.cursor_position = Some(position);
+        if self.mouse_down {
+            self.emit_mouse(position, Phase::Move);
         }
+    }
+
+    /// Mouse `button` transitioned to `state` at `position`. Non-left buttons
+    /// are ignored — stylus-junk tracks only the drawing button today; future
+    /// versions may expose barrel/secondary events separately.
+    pub fn on_mouse_button(&mut self, button: MouseButton, state: ButtonState, position: Point) {
+        if self.active_pen_pointer.is_some() {
+            return;
+        }
+        if button != MouseButton::Left {
+            return;
+        }
+        self.cursor_position = Some(position);
+        match state {
+            ButtonState::Pressed => {
+                if !self.mouse_down {
+                    self.mouse_down = true;
+                    self.emit_mouse(position, Phase::Down);
+                }
+            }
+            ButtonState::Released => {
+                if self.mouse_down {
+                    self.mouse_down = false;
+                    self.emit_mouse(position, Phase::Up);
+                }
+            }
+        }
+    }
+
+    /// Touch (finger) event. The adapter allocates a `PointerId` on `Started`
+    /// keyed by `event.id`, reuses it for `Moved`, and frees on `Ended` /
+    /// `Cancelled`. `force` is in the unit interval; `None` means the platform
+    /// doesn't report per-touch force.
+    pub fn on_touch(&mut self, event: TouchEvent) {
+        let caps = if event.force.is_some() { ToolCaps::PRESSURE } else { ToolCaps::empty() };
+        let ts = self.timestamp();
+
+        let (pointer_id, phase) = match event.phase {
+            TouchPhase::Started => {
+                let id = alloc_pointer_id(&mut self.next_pointer_id);
+                self.touches.insert(event.id, id);
+                (id, Phase::Down)
+            }
+            TouchPhase::Moved => {
+                let Some(&id) = self.touches.get(&event.id) else {
+                    return;
+                };
+                (id, Phase::Move)
+            }
+            TouchPhase::Ended => {
+                let Some(id) = self.touches.remove(&event.id) else { return };
+                (id, Phase::Up)
+            }
+            TouchPhase::Cancelled => {
+                let Some(id) = self.touches.remove(&event.id) else { return };
+                (id, Phase::Cancel)
+            }
+        };
+
+        let sample = Sample::finger(event.position, ts, pointer_id, event.force);
+        self.queue.push_back(StylusEvent::Sample { sample, phase, caps });
     }
 
     /// Empty the output queue. Callers process the returned events in FIFO order.
@@ -267,7 +302,7 @@ impl StylusAdapter {
     /// `NSApplicationDidResignActive`). Any active strokes get synthesized
     /// Cancel events so downstream tears them down instead of leaving
     /// half-drawn lines stranded.
-    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    #[cfg_attr(not(all(feature = "mac", any(target_os = "macos", test))), allow(dead_code))]
     pub(crate) fn on_focus_lost(&mut self) {
         // Cancel mouse stroke.
         if self.mouse_down {
@@ -340,38 +375,49 @@ impl StylusAdapter {
         let sample = Sample::mouse(position, self.timestamp(), PointerId::MOUSE);
         self.queue.push_back(StylusEvent::Sample { sample, phase, caps: ToolCaps::empty() });
     }
+}
 
-    fn handle_touch(&mut self, touch: &Touch) {
-        let position = Point::new(touch.location.x, touch.location.y);
-        let force = touch.force.map(normalize_force);
-        let caps = if force.is_some() { ToolCaps::PRESSURE } else { ToolCaps::empty() };
-        let ts = self.timestamp();
+/// Which mouse button triggered an `on_mouse_button` call. Only `Left` is
+/// routed into the stylus event stream today — barrel/secondary buttons on a
+/// pen ride on `StylusButtons` instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+    Other(u16),
+}
 
-        let (pointer_id, phase) = match touch.phase {
-            TouchPhase::Started => {
-                let id = alloc_pointer_id(&mut self.next_pointer_id);
-                self.touches.insert(touch.id, id);
-                (id, Phase::Down)
-            }
-            TouchPhase::Moved => {
-                let Some(&id) = self.touches.get(&touch.id) else {
-                    return;
-                };
-                (id, Phase::Move)
-            }
-            TouchPhase::Ended => {
-                let Some(id) = self.touches.remove(&touch.id) else { return };
-                (id, Phase::Up)
-            }
-            TouchPhase::Cancelled => {
-                let Some(id) = self.touches.remove(&touch.id) else { return };
-                (id, Phase::Cancel)
-            }
-        };
+/// Pressed/released state for `on_mouse_button`. Kept separate from
+/// `crate::Phase` because mouse buttons don't have a hover concept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonState {
+    Pressed,
+    Released,
+}
 
-        let sample = Sample::finger(position, ts, pointer_id, force);
-        self.queue.push_back(StylusEvent::Sample { sample, phase, caps });
-    }
+/// Touch-phase transition for the primitive `on_touch` entry point. Mirrors
+/// the shape platform touch APIs converge on — started → moved → ended, with
+/// cancelled as a separate terminal state for "OS took the gesture away"
+/// (e.g., a swipe-in from a screen edge during a stroke).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchPhase {
+    Started,
+    Moved,
+    Ended,
+    Cancelled,
+}
+
+/// One touch point's delivery. `id` identifies this finger across the
+/// gesture; the adapter maps it to a stable `PointerId`. `force` is 0..=1 if
+/// the platform reports it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TouchEvent {
+    pub id: u64,
+    pub phase: TouchPhase,
+    pub position: Point,
+    pub force: Option<f32>,
 }
 
 impl Default for StylusAdapter {
@@ -386,46 +432,31 @@ pub(crate) fn alloc_pointer_id(counter: &mut u64) -> PointerId {
     PointerId(id)
 }
 
-fn normalize_force(force: Force) -> f32 {
-    // Pressure lives in 0..=1 and is already constrained, so f64→f32 is safe here.
-    #[allow(clippy::cast_possible_truncation)]
-    match force {
-        Force::Calibrated { force, max_possible_force, .. } => {
-            if max_possible_force > 0.0 {
-                (force / max_possible_force) as f32
-            } else {
-                0.0
-            }
-        }
-        Force::Normalized(n) => n as f32,
-    }
-}
-
 // Re-export platform types at the adapter level so backend files
 // (`crate::macos_tablet`, `crate::windows_tablet`, …) don't need to reach
 // into `adapter::mac` etc. Gated on real target-os so a host test build
 // (which compiles all platform submodules via the `, test` gate) doesn't
 // flag these as unused — the backend file that consumes them is only
 // compiled on its native target.
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "android", target_os = "android"))]
 pub(crate) use android::{AndroidProximitySample, AndroidRawSample, AndroidSourcePhase};
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "mac", target_os = "macos"))]
 pub(crate) use mac::{
     MacTabletOrigin, MacTabletPhase, MacTabletProximitySample, MacTabletRawSample,
 };
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "wayland", target_os = "linux"))]
 pub(crate) use wayland::{WaylandProximitySample, WaylandRawSample, WaylandTabletPhase};
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
 pub(crate) use web::{WebPointerType, WebProximitySample, WebRawSample, WebSourcePhase};
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "windows", target_os = "windows"))]
 pub(crate) use windows::{WindowsPointerPhase, WindowsProximitySample, WindowsRawSample};
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "x11", target_os = "linux"))]
 pub(crate) use x11::{X11ProximitySample, X11RawSample, X11TabletPhase};
 
 // iOS ships as a stub backend today that doesn't reference the adapter
 // types directly; re-export behind the same real-target gate for when the
 // UIView body lands.
-#[cfg(target_os = "ios")]
+#[cfg(all(feature = "ios", target_os = "ios"))]
 pub(crate) use ios::{
     IosEstimatedProperties, IosTouchPhase, IosTouchProximitySample, IosTouchRawSample,
 };

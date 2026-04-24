@@ -7,15 +7,14 @@
 
 use std::time::Duration;
 
-use aj_core::{
-    PointerId, Sample, SampleClass, SampleRevision, StylusButtons, Tilt, ToolCaps, ToolKind,
+use crate::{
+    Point, PointerId, Sample, SampleClass, SampleRevision, StylusButtons, Tilt, ToolCaps, ToolKind,
 };
-use kurbo::Point;
 
 use super::{OPTIMISTIC_PEN_CAPS, PlatformTimestampAnchor, StylusAdapter, alloc_pointer_id};
 use crate::{Phase, StylusEvent};
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(all(feature = "ios", any(target_os = "ios", test)))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IosTouchPhase {
     Down,
@@ -26,7 +25,7 @@ pub(crate) enum IosTouchPhase {
     Hover,
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(all(feature = "ios", any(target_os = "ios", test)))]
 bitflags::bitflags! {
     /// Which axes are `.estimated` or `expecting update` on an iOS `UITouch`.
     /// Mirrors `UITouchProperties` but keeps the adapter free of UIKit types.
@@ -50,7 +49,7 @@ bitflags::bitflags! {
 /// `IosTouchRawSample` per element of `UIEvent.coalescedTouches(for:)`
 /// (all tagged `Committed`) plus one per element of
 /// `UIEvent.predictedTouches(for:)` (tagged `Predicted`).
-#[cfg(any(target_os = "ios", test))]
+#[cfg(all(feature = "ios", any(target_os = "ios", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct IosTouchRawSample {
     pub position_physical_px: Point,
@@ -81,7 +80,7 @@ pub(crate) struct IosTouchRawSample {
     pub predicted: bool,
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(all(feature = "ios", any(target_os = "ios", test)))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct IosTouchProximitySample {
     pub touch_id: u64,
@@ -90,7 +89,7 @@ pub(crate) struct IosTouchProximitySample {
     pub is_entering: bool,
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(all(feature = "ios", any(target_os = "ios", test)))]
 #[allow(clippy::similar_names)]
 pub(crate) fn ios_altitude_azimuth_to_tilt_xy_deg(altitude: f32, azimuth: f32) -> (f32, f32) {
     let theta = std::f32::consts::FRAC_PI_2 - altitude;
@@ -105,7 +104,7 @@ pub(crate) fn ios_altitude_azimuth_to_tilt_xy_deg(altitude: f32, azimuth: f32) -
 }
 
 impl StylusAdapter {
-    #[cfg(any(target_os = "ios", test))]
+    #[cfg(all(feature = "ios", any(target_os = "ios", test)))]
     pub(crate) fn handle_ios_raw(&mut self, raw: IosTouchRawSample) {
         let ts = PlatformTimestampAnchor::translate_or_anchor(
             &mut self.ios_anchor,
@@ -191,7 +190,7 @@ impl StylusAdapter {
     /// Keyed by `update_index` directly because iOS can deliver these out
     /// of order for Pencil-over-BT scenarios — unlike mac where the first
     /// Move closes the Down's estimate linearly.
-    #[cfg(any(target_os = "ios", test))]
+    #[cfg(all(feature = "ios", any(target_os = "ios", test)))]
     pub(crate) fn handle_ios_estimated_update(
         &mut self,
         update_index: u64,
@@ -203,7 +202,7 @@ impl StylusAdapter {
         self.queue.push_back(StylusEvent::Revise { pointer_id: pid, update_index, revision });
     }
 
-    #[cfg(any(target_os = "ios", test))]
+    #[cfg(all(feature = "ios", any(target_os = "ios", test)))]
     pub(crate) fn handle_ios_proximity(&mut self, prox: IosTouchProximitySample) {
         if !prox.is_entering
             && let Some(pid) = self.ios_pointers.remove(&prox.touch_id)
@@ -223,7 +222,7 @@ impl StylusAdapter {
         }
     }
 
-    #[cfg(any(target_os = "ios", test))]
+    #[cfg(all(feature = "ios", any(target_os = "ios", test)))]
     pub(crate) fn handle_ios_pencil_interaction(
         &mut self,
         kind: crate::PencilInteractionKind,
@@ -233,7 +232,7 @@ impl StylusAdapter {
     }
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(all(feature = "ios", any(target_os = "ios", test)))]
 fn build_ios_sample(raw: &IosTouchRawSample, timestamp: Duration, pointer_id: PointerId) -> Sample {
     let (tilt_x, tilt_y) = ios_altitude_azimuth_to_tilt_xy_deg(raw.altitude_rad, raw.azimuth_rad);
     let mut sample =
@@ -251,8 +250,7 @@ fn build_ios_sample(raw: &IosTouchRawSample, timestamp: Duration, pointer_id: Po
 
 #[cfg(test)]
 mod tests {
-    use aj_core::{PointerId, SampleClass, SampleRevision, ToolKind};
-    use kurbo::Point;
+    use crate::{Point, PointerId, SampleClass, SampleRevision, ToolKind};
 
     use super::super::OPTIMISTIC_PEN_CAPS;
     use super::super::tests_common::{adapter, drained, expect_sample};
