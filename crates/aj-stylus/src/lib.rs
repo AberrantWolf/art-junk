@@ -26,14 +26,19 @@ mod windows_tablet;
 #[cfg(target_arch = "wasm32")]
 mod web_pointer;
 
+#[cfg(target_os = "ios")]
+mod ios_touch;
+
 pub use adapter::StylusAdapter;
+#[cfg(target_os = "ios")]
+pub use ios_touch::{IosStylusBackend, IosStylusInstallError, install as install_ios};
 #[cfg(target_os = "linux")]
 pub use linux_wayland_tablet::{WaylandTabletBackend, WaylandTabletInstallError};
 #[cfg(target_os = "linux")]
 pub use linux_x11_tablet::{X11TabletBackend, X11TabletInstallError};
 #[cfg(target_os = "macos")]
 pub use macos_tablet::{MacTabletBackend, MacTabletInstallError};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use objc2::MainThreadMarker;
 #[cfg(target_arch = "wasm32")]
 pub use web_pointer::{WebStylusAttachError, WebStylusBridge, attach as attach_web};

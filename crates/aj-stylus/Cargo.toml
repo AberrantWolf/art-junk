@@ -16,6 +16,7 @@ aj-core.workspace = true
 kurbo.workspace = true
 winit.workspace = true
 log.workspace = true
+bitflags.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
@@ -32,6 +33,19 @@ wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 # X11 / XWayland path (runtime-selected via `RawDisplayHandle::Xlib`/`Xcb`).
 x11rb = { version = "0.13", features = ["xinput"] }
 raw-window-handle = "0.6"
+thiserror.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-ui-kit = { version = "0.3", features = [
+    "UIResponder",
+    "UIView",
+    "UIEvent",
+    "UITouch",
+    "UIApplication",
+] }
+objc2-foundation = { version = "0.3", features = ["NSNotification", "NSSet", "NSString"] }
+block2 = "0.6"
 thiserror.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
