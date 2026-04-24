@@ -191,12 +191,17 @@ struct DeviceAxes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TiltScaling {
     Libinput,
+    #[expect(
+        dead_code,
+        reason = "reserved for future hardware-specific overrides; match arm exists in apply_tilt"
+    )]
     LegacyWacom,
 }
 
 #[derive(Debug, Clone)]
 struct StylusDevice {
     id: DeviceId,
+    #[expect(dead_code, reason = "kept for Debug output and future diagnostics/logging")]
     name: String,
     tool: ToolKind,
     axes: DeviceAxes,

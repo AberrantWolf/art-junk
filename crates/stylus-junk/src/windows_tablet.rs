@@ -1,4 +1,4 @@
-//! Windows tablet-input backend. Subclasses the winit-owned HWND via
+//! Windows tablet-input backend. Subclasses the winit-owned `HWND` via
 //! `SetWindowSubclass`, intercepts `WM_POINTER*` messages, filters on
 //! `GetPointerType == PT_PEN`, drains `GetPointerPenInfoHistory` so rapid
 //! samples between frames aren't lost, forwards everything else to
@@ -6,11 +6,11 @@
 //!
 //! Design decisions (see `.claude/skills/stylus-input/windows.md`):
 //!
-//! - **WM_POINTER over RealTimeStylus / WinRT Ink.** MS's recommended modern
-//!   path; covers pressure/tilt/rotation/eraser/hover; separates touch/pen/
-//!   mouse cleanly. No COM apartment dance, no XAML coupling.
-//! - **Subclass HWND instead of forking winit.** Symmetric to the macOS
-//!   NSEvent-monitor approach; survives winit version bumps.
+//! - **`WM_POINTER` over `RealTimeStylus` / `WinRT` Ink.** MS's recommended
+//!   modern path; covers pressure/tilt/rotation/eraser/hover; separates
+//!   touch/pen/mouse cleanly. No COM apartment dance, no XAML coupling.
+//! - **Subclass `HWND` instead of forking winit.** Symmetric to the macOS
+//!   `NSEvent`-monitor approach; survives winit version bumps.
 //! - **QPC timestamps.** `POINTER_INFO.dwTime` is `GetTickCount`-scale
 //!   (32-bit ms, 49-day wraparound). `PerformanceCount` is
 //!   `QueryPerformanceCounter` ticks — monotonic, high-res. We cache
@@ -23,7 +23,12 @@
 //!   `PT_TOUCH` messages and OEM-synthesized `WM_MOUSEMOVE` /
 //!   `WM_LBUTTON*` that old Wacom/HP drivers still fire.
 
-#![allow(unsafe_code)]
+// Win32 pointer APIs use wide integer types for values with small, fixed
+// ranges (pressure u16 ≤ 1024, tilt i32 in ±90, rotation u32 in 0..360,
+// QPC i64 ticks). The "precision loss" and "possible truncation" clippy
+// lints here are false positives for the known ranges — allow module-wide
+// rather than sprinkle per-site attributes over every FFI touch point.
+#![allow(unsafe_code, clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 use std::cell::RefCell;
 use std::mem::MaybeUninit;
@@ -56,9 +61,9 @@ const POINTER_FLAG_INRANGE: u32 = 0x0000_0002;
 const POINTER_FLAG_INCONTACT: u32 = 0x0000_0004;
 
 /// Bits used in the flags field of `POINTER_PEN_INFO.penFlags`.
-const PEN_FLAG_BARREL: u32 = 0x00000001;
-const PEN_FLAG_INVERTED: u32 = 0x00000002;
-const PEN_FLAG_ERASER: u32 = 0x00000004;
+const PEN_FLAG_BARREL: u32 = 0x0000_0001;
+const PEN_FLAG_INVERTED: u32 = 0x0000_0002;
+const PEN_FLAG_ERASER: u32 = 0x0000_0004;
 
 /// Each backend instance registers with a unique subclass id so multiple
 /// subclasses on the same HWND don't collide. The value only needs to be
@@ -95,6 +100,10 @@ impl WindowsTabletBackend {
     /// Install the subclass on `hwnd`. The caller must own the HWND (winit
     /// does), and the subclass must be installed and removed on the same
     /// thread that owns the window (Win32 rule).
+    // `HWND` is `*mut c_void`; winit is the only producer we expect, and we
+    // null-check on entry. Marking the whole fn `unsafe` would churn every
+    // caller for a signature that's already FFI-shaped.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn install(
         adapter: Rc<RefCell<StylusAdapter>>,
         hwnd: HWND,
@@ -108,7 +117,7 @@ impl WindowsTabletBackend {
         let mut freq: i64 = 0;
         // SAFETY: QueryPerformanceFrequency has no preconditions and only
         // writes into the provided out-pointer.
-        let ok = unsafe { QueryPerformanceFrequency(&mut freq) };
+        let ok = unsafe { QueryPerformanceFrequency(&raw mut freq) };
         if ok == 0 || freq == 0 {
             return Err(WindowsTabletInstallError::NoQpcFrequency);
         }
@@ -188,7 +197,7 @@ unsafe extern "system" fn subclass_proc(
             let mut ptype: POINTER_INPUT_TYPE = 0;
             // SAFETY: GetPointerType writes into the provided out-pointer;
             // returns 0 on failure.
-            let got = unsafe { GetPointerType(pointer_id, &mut ptype) };
+            let got = unsafe { GetPointerType(pointer_id, &raw mut ptype) };
             if got == 0 {
                 return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
             }
@@ -239,7 +248,8 @@ fn handle_pen(state: &mut SubclassState, hwnd: HWND, msg: u32, pointer_id: u32) 
         history.resize(count as usize, unsafe {
             MaybeUninit::<POINTER_PEN_INFO>::zeroed().assume_init()
         });
-        let ok = unsafe { GetPointerPenInfoHistory(pointer_id, &mut count, history.as_mut_ptr()) };
+        let ok =
+            unsafe { GetPointerPenInfoHistory(pointer_id, &raw mut count, history.as_mut_ptr()) };
         if ok == 0 {
             history.clear();
             break;
@@ -253,7 +263,7 @@ fn handle_pen(state: &mut SubclassState, hwnd: HWND, msg: u32, pointer_id: u32) 
 
     if history.is_empty() {
         let mut info: POINTER_PEN_INFO = unsafe { std::mem::zeroed() };
-        let ok = unsafe { GetPointerPenInfo(pointer_id, &mut info) };
+        let ok = unsafe { GetPointerPenInfo(pointer_id, &raw mut info) };
         if ok == 0 {
             return;
         }
@@ -288,7 +298,7 @@ fn emit_pen_info(state: &mut SubclassState, hwnd: HWND, msg: u32, info: &POINTER
         // Shouldn't happen — install() rejects zero freq — but fall back
         // to a fresh QPC read so we don't emit wall-clock.
         let mut now: i64 = 0;
-        unsafe { QueryPerformanceCounter(&mut now) };
+        unsafe { QueryPerformanceCounter(&raw mut now) };
         now as f64 / state.qpc_freq.max(1.0)
     };
 
@@ -330,7 +340,7 @@ fn screen_to_client_point(hwnd: HWND, raw: POINT) -> Point {
     let mut pt = POINT { x: raw.x, y: raw.y };
     // SAFETY: pt is a valid POINT; ScreenToClient only mutates its target.
     unsafe {
-        ScreenToClient(hwnd, &mut pt);
+        ScreenToClient(hwnd, &raw mut pt);
     }
     Point::new(f64::from(pt.x), f64::from(pt.y))
 }
@@ -371,7 +381,7 @@ fn deliver_cancel(state: &mut SubclassState, hwnd: HWND, pointer_id: u32) {
     // if available, else (0,0) — the adapter's `take_pending_for_pointer`
     // tears the stroke down either way.
     let mut info: POINTER_PEN_INFO = unsafe { std::mem::zeroed() };
-    let ok = unsafe { GetPointerPenInfo(pointer_id, &mut info) };
+    let ok = unsafe { GetPointerPenInfo(pointer_id, &raw mut info) };
     let (position, timestamp_secs, tool) = if ok != 0 {
         (
             screen_to_client_point(hwnd, info.pointerInfo.ptPixelLocationRaw),

@@ -16,6 +16,14 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# `epaint_default_fonts` bundles Ubuntu Font (UFL-1.0) and SIL Open Font License
+# 1.1 font assets alongside its MIT/Apache code. The font licenses permit
+# redistribution on the terms we already ship under; scope the exception to
+# this crate so it can't silently expand.
+[[licenses.exceptions]]
+name = "epaint_default_fonts"
+allow = ["OFL-1.1", "LicenseRef-UFL-1.0"]
+
 [advisories]
 version = 2
 yanked = "deny"
@@ -29,6 +37,10 @@ ignore = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Internal workspace crates are referenced by `path` alone; cargo encodes that
+# as a `*` version. We never publish these with wildcards — the ban is for
+# third-party deps only.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
