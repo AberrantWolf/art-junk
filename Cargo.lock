@@ -115,6 +115,7 @@ version = "0.1.0"
 dependencies = [
  "aj-core",
  "block2 0.6.2",
+ "js-sys",
  "kurbo",
  "log",
  "objc2 0.6.4",
@@ -122,9 +123,12 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "thiserror 2.0.18",
+ "wasm-bindgen",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
+ "web-sys",
+ "windows-sys 0.59.0",
  "winit",
  "x11rb",
 ]

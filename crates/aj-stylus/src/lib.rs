@@ -20,6 +20,12 @@ mod linux_wayland_tablet;
 #[cfg(target_os = "linux")]
 mod linux_x11_tablet;
 
+#[cfg(target_os = "windows")]
+mod windows_tablet;
+
+#[cfg(target_arch = "wasm32")]
+mod web_pointer;
+
 pub use adapter::StylusAdapter;
 #[cfg(target_os = "linux")]
 pub use linux_wayland_tablet::{WaylandTabletBackend, WaylandTabletInstallError};
@@ -29,6 +35,10 @@ pub use linux_x11_tablet::{X11TabletBackend, X11TabletInstallError};
 pub use macos_tablet::{MacTabletBackend, MacTabletInstallError};
 #[cfg(target_os = "macos")]
 pub use objc2::MainThreadMarker;
+#[cfg(target_arch = "wasm32")]
+pub use web_pointer::{WebStylusAttachError, WebStylusBridge, attach as attach_web};
+#[cfg(target_os = "windows")]
+pub use windows_tablet::{WindowsTabletBackend, WindowsTabletInstallError};
 
 use aj_core::{PointerId, Sample, SampleRevision, ToolCaps};
 use kurbo::Point;
