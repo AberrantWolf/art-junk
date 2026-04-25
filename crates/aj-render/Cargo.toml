@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Vello-based rendering pipeline for art-junk scenes."
+publish = false
 
 [lints]
 workspace = true
