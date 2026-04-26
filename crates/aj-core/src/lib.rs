@@ -4,8 +4,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod input;
+pub mod pigment;
 
 pub use input::{BrushParams, LinearRgba, MAX_WIDTH_MAX, MAX_WIDTH_MIN, MixingMode, PressureCurve};
+pub use pigment::{KubelkaMunk, MixOp, Pigment};
 // Input-sample types live in `stylus-junk`; re-export so existing aj-core
 // consumers keep working with their current import paths.
 pub use stylus_junk::{

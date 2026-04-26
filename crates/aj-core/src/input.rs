@@ -118,11 +118,12 @@ impl Default for BrushParams {
     }
 }
 
-/// How a brush's paint combines with the canvas underneath it. Kept as a
-/// dedicated enum so a future paint-like pigment mixing milestone (spectral
-/// Kubelka-Munk + Jakob-Hanika upsampling) can add a variant without churning
-/// every `BrushParams` call site. `#[non_exhaustive]` makes that forward-
-/// compatible: downstream `match` arms must already handle an unknown variant.
+/// How a brush's paint combines with the canvas underneath it. `#[non_exhaustive]`
+/// keeps `match` arms forward-compatible at compile time; the `#[serde(other)]`
+/// `Unknown` variant keeps deserialization forward-compatible at the wire — a
+/// document saved by a future build with an unrecognized variant loads as
+/// `Unknown` rather than hard-failing, so a phase-G tier-3 mode does not need
+/// a `doc_version` bump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -132,6 +133,14 @@ pub enum MixingMode {
     /// light; wrong for paint (yellow + blue = gray rather than green).
     #[default]
     Additive,
+    /// Kubelka–Munk pigment-style mixing via [`crate::Pigment`]. Paint-like:
+    /// blends in K/S space rather than linear RGB.
+    Pigment,
+    /// Forward-compat fallback: deserialized when an older binary loads a
+    /// document written with a newer variant. Behaves as `Additive` in the
+    /// renderer (safe default) until upgraded; never serialized in this form.
+    #[cfg_attr(feature = "serde", serde(other))]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

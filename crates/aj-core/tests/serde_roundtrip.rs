@@ -178,8 +178,24 @@ fn brush_params_roundtrips() {
 
 #[test]
 fn mixing_mode_roundtrips() {
-    let got: MixingMode = cbor_roundtrip(&MixingMode::Additive);
-    assert_eq!(got, MixingMode::Additive);
+    for mode in [MixingMode::Additive, MixingMode::Pigment] {
+        let got: MixingMode = cbor_roundtrip(&mode);
+        assert_eq!(got, mode);
+    }
+}
+
+/// Forward-compat fence: a CBOR blob written by a hypothetical future build
+/// with an unrecognized `mixing_mode` string (`latent_pigment` here) must
+/// deserialize into `MixingMode::Unknown` rather than hard-fail. Without
+/// `#[serde(other)]` on the enum this test would error at deserialize time.
+#[test]
+fn unknown_mixing_mode_variant_falls_back_to_unknown() {
+    // Tag-only enum encodes as a string in CBOR. We hand-craft a payload
+    // matching the serde "snake_case" external-tag form for an enum variant.
+    let mut bytes = Vec::new();
+    ciborium::into_writer(&"latent_pigment", &mut bytes).expect("serialize string");
+    let got: MixingMode = ciborium::from_reader(bytes.as_slice()).expect("deserialize unknown");
+    assert_eq!(got, MixingMode::Unknown);
 }
 
 /// Fence: a CBOR blob minted without the `mixing_mode` key (i.e. one produced
@@ -208,8 +224,8 @@ fn brush_params_deserializes_legacy_blob_without_mixing_mode() {
     ciborium::into_writer(&legacy, &mut bytes).expect("serialize legacy");
     let got: BrushParams = ciborium::from_reader(bytes.as_slice()).expect("deserialize current");
 
-    assert_eq!(got.min_width, 0.5);
-    assert_eq!(got.max_width, 4.0);
+    assert!((got.min_width - 0.5).abs() < f32::EPSILON);
+    assert!((got.max_width - 4.0).abs() < f32::EPSILON);
     assert_eq!(got.curve, PressureCurve::Linear);
     assert_eq!(got.color.to_srgb8(), [0, 200, 220, 255]);
     assert_eq!(got.mixing_mode, MixingMode::Additive);
