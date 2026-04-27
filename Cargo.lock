@@ -110,6 +110,8 @@ version = "0.1.0"
 dependencies = [
  "aj-core",
  "anyhow",
+ "bytemuck",
+ "log",
  "vello",
  "wgpu",
 ]

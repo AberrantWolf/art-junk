@@ -40,6 +40,7 @@ vello = "0.3"
 arc-swap = "1"
 crossbeam-channel = "0.5"
 bitflags = "2"
+bytemuck = { version = "1", features = ["derive"] }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 ciborium = "0.2"
 

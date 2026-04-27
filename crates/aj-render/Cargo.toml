@@ -15,5 +15,7 @@ workspace = true
 [dependencies]
 aj-core.workspace = true
 anyhow.workspace = true
+bytemuck.workspace = true
+log.workspace = true
 vello.workspace = true
 wgpu.workspace = true

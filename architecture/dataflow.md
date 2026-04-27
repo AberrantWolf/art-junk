@@ -29,6 +29,13 @@ sequenceDiagram
   UI->>UI: window.request_redraw()
   UI->>VP: to_affine(dpi_scale) → world_to_screen: Affine
   UI->>Ren: render(&snapshot.scene, world_to_screen, surface_texture)
+  Ren->>Ren: StrokeCompositor.begin_frame()  # substrate ← (1,1,1,0); chrome ← transparent
+  loop each stroke in z-order
+    Ren->>Ren: vello.render_to_texture(stroke, coverage)  # white fill, alpha = AA coverage
+    Ren->>Ren: apply_stroke: brush program (plain | pigment) reads substrate, writes back, ping-pong swap
+  end
+  Ren->>Ren: vello.render_to_texture(chrome scene, chrome_buffer)  # page border, future on-canvas guides
+  Ren->>Ren: present pass: substrate over backdrop in linear → sRGB → composite chrome on top → surface
   UI->>Chr: paint(surface_texture, full_output)   # egui overlay, LoadOp::Load
   UI->>UI: frame.present()
 ```
@@ -149,6 +156,33 @@ sequenceDiagram
 - The renderer reads `ArcSwap::load_full()` lock-free; the engine can publish
   concurrently with no coordination.
 - egui chrome shares the surface texture with Vello via two-submit overlay:
-  Vello's `render_to_surface` submits first; egui-wgpu's pass uses `LoadOp::Load`
-  on the same surface view so chrome overlays the drawing.
+  the stroke compositor's present pass submits first; egui-wgpu's pass uses
+  `LoadOp::Load` on the same surface view so chrome overlays the drawing.
+- **Stroke compositor.** A linear-RGB substrate is the canvas's ground truth.
+  `aj-render::brush_programs::StrokeCompositor` owns:
+  - Two ping-pong substrate textures (`Rgba16Float`) initialised per frame to
+    `(1, 1, 1, 0)` — white paper, alpha = "no paint here yet". Each stroke's
+    brush program reads the front side and writes the back; `front_idx`
+    swaps after every deposit. Float headroom avoids 8-bit banding from the
+    repeated read-modify-write.
+  - One coverage `Rgba8Unorm` texture (reused across strokes) that Vello
+    rasterizes each stroke into; the brush program reads its alpha as the
+    AA coverage weight.
+  - One chrome `Rgba8Unorm` buffer where Vello renders the page border (and
+    future on-canvas decorations) once per frame.
+  - Two brush programs in Phase A: **plain** (linear-RGB alpha-over) and
+    **pigment** (Kubelka–Munk K/S in 7-band space, with the substrate's RGB
+    upsampled to bands at read time and the result integrated back to linear
+    RGB before write — "already dried" assumption, no wet-on-wet diffusion).
+    Math mirrors `aj_core::pigment::km`; CPU mirror in `parity.rs` enforces
+    no drift. Adding a brush program (e.g. highlighter in Phase B) is one
+    WGSL file plus one extra pipeline registration.
+  - A present fragment pass that composites the substrate over the surface
+    backdrop in linear RGB, sRGB-encodes, then composites chrome on top in
+    sRGB (chrome arrives sRGB-encoded from Vello). One render path — brush
+    type is a per-stroke pipeline switch, not a top-level branch, so plain
+    and pigment strokes deposit in the order the user drew them.
+  Lazily allocated on first render — needs surface dimensions to size the
+  substrate; survives across frames and resizes in place when dimensions
+  change.
 ```
