@@ -24,6 +24,7 @@ impl Chrome {
         // UI-scaling feature. We own those shortcuts for canvas zoom, so turn
         // egui's built-in handler off.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        install_fonts(&ctx);
         let viewport_id = ctx.viewport_id();
         #[allow(clippy::cast_possible_truncation)]
         let scale = window.scale_factor() as f32;
@@ -94,4 +95,30 @@ impl Chrome {
 
         gpu.queue.submit(staging.into_iter().chain(std::iter::once(encoder.finish())));
     }
+}
+
+/// Append `DejaVuSans` + `NotoEmoji-Regular` as fallbacks behind egui's
+/// default fonts. Existing glyphs (Latin text, mostly) keep rendering
+/// via Ubuntu-Light / Hack, but codepoints the defaults don't cover (▲
+/// ▼ ▶ 👁 etc., used by the brush + layers panel buttons) now resolve
+/// instead of falling through to the missing-glyph "tofu" rectangle.
+///
+/// See `assets/fonts/README.md` for sources + licenses.
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "dejavu_sans".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/DejaVuSans.ttf")),
+    );
+    fonts.font_data.insert(
+        "noto_emoji".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf")),
+    );
+    let prop = fonts.families.entry(egui::FontFamily::Proportional).or_default();
+    prop.push("dejavu_sans".to_owned());
+    prop.push("noto_emoji".to_owned());
+    let mono = fonts.families.entry(egui::FontFamily::Monospace).or_default();
+    mono.push("dejavu_sans".to_owned());
+    mono.push("noto_emoji".to_owned());
+    ctx.set_fonts(fonts);
 }

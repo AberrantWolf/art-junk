@@ -52,6 +52,16 @@ Dual-licensed under either of
 
 at your option.
 
+### Bundled third-party assets
+
+A small number of font files ship with the binary so the UI can render
+icons, geometric shapes, and emoji glyphs. They sit alongside their own
+license texts under [`crates/aj-app/assets/fonts/`](crates/aj-app/assets/fonts/);
+see that directory's `README.md` for sources, versions, and the
+permissive licenses they ship under (DejaVu Fonts License, SIL OFL 1.1).
+None of these are GPL-style copyleft, and none impose any obligation on
+the project's own code license.
+
 ### Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

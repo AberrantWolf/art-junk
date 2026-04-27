@@ -65,6 +65,11 @@ struct PickerState {
     /// Hex input buffer; kept distinct from `okhsl` so the user can edit
     /// mid-type without the sliders snapping on every keystroke.
     hex_input: String,
+    /// Latest alpha from the engine, snapshot at `sync_from_engine`. The
+    /// picker treats opacity as orthogonal — it never changes alpha — but
+    /// `commit` needs to round-trip the engine's current alpha so a color
+    /// change doesn't accidentally reset the user's brush opacity to 1.
+    current_alpha: f32,
 }
 
 impl Default for PickerState {
@@ -76,6 +81,7 @@ impl Default for PickerState {
             plane_texture: None,
             plane_hue_cache: None,
             hex_input: String::new(),
+            current_alpha: 1.0,
         }
     }
 }
@@ -105,6 +111,8 @@ pub fn draw(ui: &mut egui::Ui, current: LinearRgba, out: &mut Vec<BrushAction>) 
 }
 
 fn sync_from_engine(state: &mut PickerState, current: LinearRgba) {
+    // Keep the alpha snapshot fresh so commit round-trips it on every edit.
+    state.current_alpha = current.a;
     // If the engine's color is (within epsilon) what we'd produce from our
     // current Okhsl, keep state as-is — preserves UI hue across C≈0 moments.
     // Otherwise the color was changed from outside the picker (undo, keyboard
@@ -386,11 +394,14 @@ fn draw_swatches(ui: &mut egui::Ui, state: &mut PickerState, out: &mut Vec<Brush
 }
 
 fn commit(state: &PickerState, out: &mut Vec<BrushAction>) {
-    let rgba = color::okhsl_to_linear_rgba(state.okhsl, 1.0);
+    let rgba = color::okhsl_to_linear_rgba(state.okhsl, state.current_alpha);
     out.push(BrushAction::SetColor(rgba));
 }
 
 fn push_recent(state: &mut PickerState) {
+    // Recent swatches store at α = 1 — they capture *which color*, not
+    // which opacity. Re-clicking a swatch restores the color but leaves
+    // brush opacity (controlled by its own slider) alone.
     let rgba = color::okhsl_to_linear_rgba(state.okhsl, 1.0);
     state.recent.retain(|r| !linear_rgba_approx_eq(*r, rgba));
     state.recent.push_front(rgba);

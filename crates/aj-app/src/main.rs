@@ -27,7 +27,7 @@ use winit::window::{Window, WindowId};
 use crate::compose::Chrome;
 use crate::gpu::GpuState;
 use crate::shortcuts::AppAction;
-use crate::ui::{Action, BrushAction, ViewAction, draw_menu_bar};
+use crate::ui::{Action, BrushAction, LayerAction, ViewAction, draw_menu_bar};
 use crate::viewport::{Viewport, ZOOM_STEP};
 
 /// Each "line" of scroll-wheel movement represents this many physical pixels when
@@ -136,6 +136,7 @@ impl App {
             pending_edit,
             pending_view,
             pending_brush,
+            pending_layer,
             page,
             live_brush,
         );
@@ -151,13 +152,25 @@ impl App {
             let mut edit: Vec<Action> = Vec::new();
             let mut view: Vec<ViewAction> = Vec::new();
             let mut brush: Vec<BrushAction> = Vec::new();
+            let mut layer: Vec<LayerAction> = Vec::new();
+            let layers = app_snapshot.scene.layers.clone();
+            let active_layer = app_snapshot.scene.active_layer;
             full_output = chrome.ctx.run(raw_input, |ctx| {
                 draw_menu_bar(ctx, app_snapshot.history, page, panel_visible, &mut edit, &mut view);
-                crate::ui::brush_panel::draw(ctx, live_brush, panel_visible, &mut brush);
+                crate::ui::right_panel::draw(
+                    ctx,
+                    live_brush,
+                    &layers,
+                    active_layer,
+                    panel_visible,
+                    &mut brush,
+                    &mut layer,
+                );
             });
             pending_edit = edit;
             pending_view = view;
             pending_brush = brush;
+            pending_layer = layer;
         }
 
         // Phase B: dispatch actions. No chrome borrow held, so `apply_view_action`
@@ -168,6 +181,9 @@ impl App {
             }
             for action in pending_brush {
                 action.dispatch(engine, live_brush);
+            }
+            for action in pending_layer {
+                action.dispatch(engine);
             }
         }
         for view_action in pending_view {

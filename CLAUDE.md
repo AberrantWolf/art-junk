@@ -83,6 +83,7 @@ The `architecture/` folder holds Mermaid diagrams that document the system visua
 - **Testing**: prefer unit tests + golden images over mocking. Golden images compare with `dssim` perceptual diff — **never pixel-equality**; AA differs across GPUs and CI will flake.
 - **Dependencies**: all must be MIT/Apache-2.0-compatible. `cargo-deny` enforces this in CI.
 - **License headers**: not required per-file. `LICENSE-MIT` and `LICENSE-APACHE` at repo root; workspace Cargo.toml declares `license = "MIT OR Apache-2.0"`.
+- **Bundled assets** (fonts, etc.): `cargo-deny` only audits Rust crates, not asset files. Bundled asset directories must carry their own `LICENSE.*` files alongside the asset and a sibling `README.md` recording source, version, license name, and what it's used for. Acceptable asset licenses are permissive ones the project's `MIT OR Apache-2.0` code license can ship with: SIL OFL 1.1, DejaVu / Bitstream Vera license, Apache-2.0, MIT, Unicode/ICU. CC BY-NC and similar non-commercial licenses are not acceptable. Today: see `crates/aj-app/assets/fonts/` for the bundled UI fonts.
 - **Formatting / lints**: `cargo fmt` and `cargo clippy -- -D warnings` are CI gates.
 - **Architecture diagrams**: keep `architecture/*.md` in sync with structural changes — see § Architecture diagrams.
 

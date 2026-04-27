@@ -25,10 +25,18 @@ sequenceDiagram
   UI->>Eng: Command::SetBrushMaxWidth / SetBrushMinWidth / SetBrushMinRatio (sliders + [ / ] / Alt+[ / Alt+])
   UI->>VP: mutate on MouseWheel / PinchGesture / ViewAction
   Eng->>His: record inverse on EndStroke; pop / push on Undo / Redo
-  Eng->>Snap: store(Arc::new(AppSnapshot { scene: SceneSnapshot { page, strokes }, history }))
+  Eng->>Snap: store(Arc::new(AppSnapshot { scene: SceneSnapshot { page, brush, layers, active_layer, active_stroke_layer }, history }))
   UI->>UI: window.request_redraw()
   UI->>VP: to_affine(dpi_scale) → world_to_screen: Affine
   UI->>Ren: render(&snapshot.scene, world_to_screen, surface_texture)
+  Ren->>Ren: StrokeCompositor.begin_frame(layer_ids)  # alloc-if-missing per layer, GC orphans, clear all
+  loop each layer (bottom-to-top), each stroke in z-order
+    Ren->>Ren: vello.render_to_texture(stroke, coverage)  # white fill, alpha = AA coverage
+    Ren->>Ren: apply_stroke(stroke, layer_id): brush program (plain | highlighter | pigment) reads layer's substrate, writes back, ping-pong swap
+  end
+  Ren->>Ren: composite_layers: for each visible layer (or active-stroke layer), blend substrate into composite ping-pong using BlendMode + opacity
+  Ren->>Ren: vello.render_to_texture(chrome scene, chrome_buffer)  # page border, future on-canvas guides
+  Ren->>Ren: present pass: composite over backdrop in linear → sRGB → chrome on top → surface
   UI->>Chr: paint(surface_texture, full_output)   # egui overlay, LoadOp::Load
   UI->>UI: frame.present()
 ```
@@ -119,14 +127,20 @@ sequenceDiagram
 - `AppSnapshot` bundles the renderer-facing `SceneSnapshot` (arc'd, so cheap to clone)
   with a `HistoryStatus { can_undo, can_redo }` so UI can enable/disable menu entries
   without reaching into engine internals. Renderer ignores `history`; UI reads
-  `scene.page` for toggle checkmarks but ignores `scene.strokes`.
-- `SceneSnapshot` is `{ page: Page, strokes: Vec<Stroke> }`. A `Stroke` is
-  `{ id, samples: Vec<Sample>, caps: ToolCaps, brush: BrushParams }`; the
-  renderer currently reads only `sample.position`, but `pressure` / `tilt` /
-  `brush` are carried end-to-end so variable-width rendering (a later
-  milestone) doesn't need a data-shape change. Page state rides the same
-  single ArcSwap publication as strokes so the renderer reads both from a
-  consistent view — no parallel channel for page mutations.
+  `scene.page` for toggle checkmarks and `scene.layers` for the layers
+  panel (C3); the layered stroke detail otherwise stays renderer-side.
+- `SceneSnapshot` is `{ page, brush, layers, active_layer, active_stroke_layer }`.
+  A `Stroke` is `{ id, samples, caps, brush }`, and a `Layer` is
+  `{ id, name, strokes, blend_mode, opacity, visible }`. The renderer
+  iterates layers directly and treats `layer.visible || active_stroke_layer
+  == Some(layer.id)` as the effective visibility — hiding a layer mid-drag
+  must not make the in-flight stroke vanish under the user's pen, but
+  `Layer.visible` itself stays the user's source of truth (the layers panel
+  reads it directly to render the eye icon). The active mid-drag stroke is
+  folded into its target layer's `strokes` by `DocumentState::snapshot()`.
+  Page state rides the same single ArcSwap publication so the renderer
+  reads page + layers + brush from a consistent view — no parallel channel
+  for page mutations.
 - Page mutations (`SetPageSize` / `SetShowBounds` / `SetClipToBounds`) are Commands
   but not `Edit`s: they bypass the history stack (non-undoable in v1, TODO noted).
 - `Viewport` (pan / zoom state) lives entirely in `aj-app`. View state is not part
@@ -149,6 +163,46 @@ sequenceDiagram
 - The renderer reads `ArcSwap::load_full()` lock-free; the engine can publish
   concurrently with no coordination.
 - egui chrome shares the surface texture with Vello via two-submit overlay:
-  Vello's `render_to_surface` submits first; egui-wgpu's pass uses `LoadOp::Load`
-  on the same surface view so chrome overlays the drawing.
+  the stroke compositor's present pass submits first; egui-wgpu's pass uses
+  `LoadOp::Load` on the same surface view so chrome overlays the drawing.
+- **Stroke compositor.** Per-layer linear-RGB substrates plus an inter-layer
+  composite accumulator. `aj-render::brush_programs::StrokeCompositor` owns:
+  - **Per-layer substrates**: a `HashMap<LayerId, [Rgba16Float; 2]>` ping-
+    pong cache. Allocate-if-missing at `begin_frame`, GC entries whose layer
+    isn't in the snapshot. Cleared per frame to `(1, 1, 1, 0)` — white
+    paper, alpha = "no paint here yet". Each stroke's brush program reads
+    the layer's front side and writes the back. Float headroom avoids
+    8-bit banding from the repeated read-modify-write.
+  - One shared coverage `Rgba8Unorm` texture (reused across strokes) that
+    Vello rasterises each stroke into; the brush program reads its alpha
+    as the AA coverage weight.
+  - One shared chrome `Rgba8Unorm` buffer where Vello renders the page
+    border (and future on-canvas decorations) once per frame.
+  - **Inter-layer composite**: a ping-pong `[Rgba16Float; 2]` accumulator.
+    `composite_layers` walks visible layers (or the active-stroke layer)
+    bottom-to-top, runs the blend pipeline matching each layer's
+    `BlendMode`, sourcing from `composite[front]` + the layer's substrate,
+    writing `composite[back]`, swapping. Per-layer `opacity` modulates the
+    blend weight. Both composite sides clear at `begin_frame` so a frame
+    with zero visible layers presents transparent (backdrop shows through).
+  - Three brush programs: **plain** (linear-RGB alpha-over, default for
+    `BrushType::Normal` and the `Unknown` fallback), **highlighter**
+    (multiplicative tint), and **pigment** (Kubelka–Munk K/S in 7-band
+    space). Pigment math mirrors `aj_core::pigment::km`; CPU mirrors in
+    `parity.rs` enforce no drift. Adding a brush program is one WGSL file
+    plus one pipeline registration.
+  - One blend program per `BlendMode`: **Normal** (linear-RGB alpha-over
+    with per-layer opacity) and **OklabMix** (perceptually-uniform lerp
+    via Oklab — Björn Ottosson 2020 — same Porter-Duff alpha math as
+    Normal, just with the RGB lerp moved into Oklab space). Lookup
+    falls back to `Normal` for `BlendMode::Unknown` — the same forward-
+    compat fallback pattern as `BrushType`. Adding a blend mode is one
+    WGSL file plus one `HashMap::insert` in `new()`.
+  - A present fragment pass that composites the accumulator over the
+    surface backdrop in linear RGB, sRGB-encodes, then overlays chrome on
+    top in sRGB (chrome arrives sRGB-encoded from Vello).
+  Lazily allocated on first render. `resize` drops everything; substrates
+  re-allocate at new size on the next `begin_frame`'s alloc-if-missing pass
+  — substrate state is per-frame ephemeral so the resize spike costs at
+  most one frame's deposits.
 ```
