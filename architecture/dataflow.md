@@ -170,13 +170,17 @@ sequenceDiagram
     AA coverage weight.
   - One chrome `Rgba8Unorm` buffer where Vello renders the page border (and
     future on-canvas decorations) once per frame.
-  - Two brush programs in Phase A: **plain** (linear-RGB alpha-over) and
-    **pigment** (Kubelka–Munk K/S in 7-band space, with the substrate's RGB
-    upsampled to bands at read time and the result integrated back to linear
-    RGB before write — "already dried" assumption, no wet-on-wet diffusion).
-    Math mirrors `aj_core::pigment::km`; CPU mirror in `parity.rs` enforces
-    no drift. Adding a brush program (e.g. highlighter in Phase B) is one
-    WGSL file plus one extra pipeline registration.
+  - Three brush programs: **plain** (linear-RGB alpha-over, default for
+    `BrushType::Normal` and the `Unknown` fallback), **highlighter**
+    (multiplicative tint — `canvas * (1 - t * (1 - brush))`; yellow over
+    black stays black, yellow over white tints toward yellow; overlapping
+    passes saturate further, no overlap cap), and **pigment** (Kubelka–Munk
+    K/S in 7-band space, with the substrate's RGB upsampled to bands at read
+    time and the result integrated back to linear RGB before write —
+    "already dried" assumption, no wet-on-wet diffusion). Pigment math
+    mirrors `aj_core::pigment::km`; CPU mirrors in `parity.rs` enforce no
+    drift for plain alpha-over, highlighter multiply, and pigment K/S.
+    Adding a brush program is one WGSL file plus one pipeline registration.
   - A present fragment pass that composites the substrate over the surface
     backdrop in linear RGB, sRGB-encodes, then composites chrome on top in
     sRGB (chrome arrives sRGB-encoded from Vello). One render path — brush

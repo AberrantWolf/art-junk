@@ -112,6 +112,7 @@ pub struct StrokeCompositor {
     brush_bgl: wgpu::BindGroupLayout,
     brush_uniform_buf: wgpu::Buffer,
     plain_pipeline: wgpu::RenderPipeline,
+    highlighter_pipeline: wgpu::RenderPipeline,
     pigment_pipeline: wgpu::RenderPipeline,
 
     present_bgl: wgpu::BindGroupLayout,
@@ -161,6 +162,10 @@ impl StrokeCompositor {
             label: Some("aj-render plain brush shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/plain.wgsl").into()),
         });
+        let highlighter_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("aj-render highlighter brush shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/highlighter.wgsl").into()),
+        });
         let pigment_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("aj-render pigment brush shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/pigment.wgsl").into()),
@@ -177,6 +182,12 @@ impl StrokeCompositor {
             "aj-render plain pipeline",
             &brush_pipeline_layout,
             &plain_shader,
+        );
+        let highlighter_pipeline = make_brush_pipeline(
+            device,
+            "aj-render highlighter pipeline",
+            &brush_pipeline_layout,
+            &highlighter_shader,
         );
         let pigment_pipeline = make_brush_pipeline(
             device,
@@ -238,6 +249,7 @@ impl StrokeCompositor {
             brush_bgl,
             brush_uniform_buf,
             plain_pipeline,
+            highlighter_pipeline,
             pigment_pipeline,
             present_bgl,
             present_pipeline,
@@ -357,6 +369,7 @@ impl StrokeCompositor {
         // safe default that won't crash a load and matches the doc on
         // `BrushType::Unknown`.
         let pipeline = match stroke.brush.brush_type {
+            BrushType::Highlighter => &self.highlighter_pipeline,
             BrushType::Pigment => &self.pigment_pipeline,
             _ => &self.plain_pipeline,
         };

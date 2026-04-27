@@ -14,6 +14,7 @@ use super::{BrushAction, color_picker};
 fn brush_type_label(brush_type: BrushType) -> &'static str {
     match brush_type {
         BrushType::Normal => "Normal",
+        BrushType::Highlighter => "Highlighter",
         BrushType::Pigment => "Pigment (paint)",
         BrushType::Unknown => "Unknown (fallback)",
         _ => "Unknown",
@@ -25,6 +26,9 @@ fn brush_type_tooltip(brush_type: BrushType) -> &'static str {
     match brush_type {
         BrushType::Normal => {
             "Standard alpha-over: opaque or semi-opaque ink that covers what's beneath. Most pens, markers, and inks behave this way."
+        }
+        BrushType::Highlighter => {
+            "Multiplicative tint: yellow over black stays black, yellow over white tints toward yellow. Overlapping passes saturate further."
         }
         BrushType::Pigment => {
             "Paint-style mixing: Kubelka–Munk in spectral space against the current substrate. Yellow over blue mixes to green."
@@ -94,7 +98,9 @@ pub fn draw(
             egui::ComboBox::from_id_salt("aj_brush_type")
                 .selected_text(brush_type_label(current))
                 .show_ui(ui, |ui| {
-                    for brush_type in [BrushType::Normal, BrushType::Pigment] {
+                    for brush_type in
+                        [BrushType::Normal, BrushType::Highlighter, BrushType::Pigment]
+                    {
                         let resp = ui
                             .selectable_label(current == brush_type, brush_type_label(brush_type));
                         let resp = resp.on_hover_text(brush_type_tooltip(brush_type));

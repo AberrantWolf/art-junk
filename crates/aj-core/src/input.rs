@@ -138,6 +138,11 @@ pub enum BrushType {
     /// blue = gray rather than green).
     #[default]
     Normal,
+    /// Multiplicative tint against the substrate — yellow over black stays
+    /// black, yellow over white tints toward yellow. Models a real highlighter
+    /// where overlapping passes saturate further (the canvas keeps darkening
+    /// channel-wise on each stroke, no overlap cap).
+    Highlighter,
     /// Kubelka–Munk pigment-style mixing via [`crate::Pigment`]. Paint-like:
     /// blends in K/S space against the current substrate color, then writes
     /// the integrated linear RGB back to the substrate.

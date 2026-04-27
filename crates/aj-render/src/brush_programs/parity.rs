@@ -168,4 +168,58 @@ mod tests {
         let one_shot = apply_plain(blank, (1.0, 1.0, 1.0), 1.0, 0.75);
         assert!((after_two.3 - one_shot.3).abs() < 1e-6);
     }
+
+    /// CPU mirror of `shaders/highlighter.wgsl`. Multiplicative tint with
+    /// coverage modulation: `new.rgb = canvas.rgb * (1 - t * (1 - brush.rgb))`.
+    fn apply_highlighter(
+        canvas: (f32, f32, f32, f32),
+        brush_rgb: (f32, f32, f32),
+        brush_alpha: f32,
+        coverage: f32,
+    ) -> (f32, f32, f32, f32) {
+        let t = (coverage * brush_alpha).clamp(0.0, 1.0);
+        let tint_r = 1.0 - t * (1.0 - brush_rgb.0);
+        let tint_g = 1.0 - t * (1.0 - brush_rgb.1);
+        let tint_b = 1.0 - t * (1.0 - brush_rgb.2);
+        let new_a = canvas.3 + (1.0 - canvas.3) * t;
+        (canvas.0 * tint_r, canvas.1 * tint_g, canvas.2 * tint_b, new_a)
+    }
+
+    /// Yellow highlighter over black text stays black — the property the
+    /// brush type exists for. If this regresses, "highlight a paragraph"
+    /// would erase the text.
+    #[test]
+    fn highlighter_over_black_stays_black() {
+        let black = (0.0, 0.0, 0.0, 1.0);
+        let yellow = (1.0, 1.0, 0.0);
+        let out = apply_highlighter(black, yellow, 1.0, 1.0);
+        assert!(out.0.abs() < f32::EPSILON);
+        assert!(out.1.abs() < f32::EPSILON);
+        assert!(out.2.abs() < f32::EPSILON);
+    }
+
+    /// Yellow highlighter over white paper at full strength tints to yellow.
+    #[test]
+    fn highlighter_over_white_tints_to_brush_color() {
+        let white = (1.0, 1.0, 1.0, 0.0);
+        let yellow = (1.0, 1.0, 0.0);
+        let out = apply_highlighter(white, yellow, 1.0, 1.0);
+        assert!((out.0 - 1.0).abs() < f32::EPSILON);
+        assert!((out.1 - 1.0).abs() < f32::EPSILON);
+        assert!(out.2.abs() < f32::EPSILON);
+    }
+
+    /// Overlapping highlighter strokes saturate further (real highlighters
+    /// do this; we explicitly chose not to cap). Two passes of a half-yellow
+    /// brush over white must darken the blue channel below one pass.
+    #[test]
+    fn highlighter_overlap_saturates_further() {
+        let white = (1.0, 1.0, 1.0, 0.0);
+        let half_yellow = (1.0, 1.0, 0.5);
+        let after_one = apply_highlighter(white, half_yellow, 1.0, 1.0);
+        let after_two = apply_highlighter(after_one, half_yellow, 1.0, 1.0);
+        assert!(after_two.2 < after_one.2, "second pass should darken further");
+        // Specifically, B = 1 * 0.5 * 0.5 = 0.25 after two full passes.
+        assert!((after_two.2 - 0.25).abs() < 1e-6);
+    }
 }
