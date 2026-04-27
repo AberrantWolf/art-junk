@@ -1,15 +1,17 @@
 //! Rendering pipeline for art-junk scenes.
 //!
-//! A linear-RGB substrate is the canvas's ground truth. Strokes deposit in
-//! z-order via per-brush-type fragment programs (alpha-over, pigment K/S);
-//! a present pass composites the substrate over the surface backdrop and
-//! sRGB-encodes for display. There is one render path — brush type is a
-//! per-stroke pipeline-state switch, not a top-level branch.
+//! Each layer in the snapshot owns a linear-RGB substrate. Strokes deposit
+//! into their layer's substrate via per-brush-type fragment programs
+//! (alpha-over, highlighter, pigment K/S). After all strokes are placed,
+//! the inter-layer composite pass blends visible layers bottom-to-top into
+//! a `composite` accumulator using each layer's `BlendMode` and `opacity`.
+//! Finally a present pass composites the accumulator over the surface
+//! backdrop and overlays page chrome.
 
 mod brush;
 mod brush_programs;
 
-use aj_core::SceneSnapshot;
+use aj_core::{LayerId, SceneSnapshot};
 use vello::kurbo::{Affine, Rect, Stroke as KStroke};
 use vello::peniko::{Color, Fill, Mix};
 use vello::{AaConfig, AaSupport, RenderParams, Renderer as VelloRenderer, RendererOptions, Scene};
@@ -56,62 +58,83 @@ impl Renderer {
         });
         compositor.resize(device, width, height);
 
-        // 1. Begin frame: clear substrate to white-paper-no-paint, chrome to transparent.
+        // 1. Begin frame: ensure a substrate exists for every layer in the
+        //    snapshot (plus the active-stroke layer as belt+suspenders),
+        //    GC orphans, clear all substrates + composite + chrome.
+        let mut keep: Vec<LayerId> = snapshot.layers.iter().map(|l| l.id).collect();
+        if let Some(asl) = snapshot.active_stroke_layer
+            && !keep.contains(&asl)
+        {
+            keep.push(asl);
+        }
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("aj-render begin-frame"),
         });
-        compositor.begin_frame(&mut encoder);
+        compositor.begin_frame(device, &mut encoder, &keep);
         queue.submit(Some(encoder.finish()));
 
-        // 2. For each stroke in z-order: rasterize coverage via Vello, then
-        // dispatch the brush program for that stroke's BrushType. Vello clears
-        // its target on every render so coverage submits per-stroke.
-        // TODO(m4-tessellation-cache): tessellate_stroke runs every frame for
-        // every stroke. For large scenes / long strokes this is wasteful; key
-        // a cache on (stroke.id, samples.len(), brush-hash, screen-scale bucket)
-        // and reuse the BezPath when inputs are unchanged.
+        // 2. For each layer (bottom-to-top), for each stroke: rasterize
+        //    coverage via Vello, dispatch the brush program against that
+        //    layer's substrate. Vello clears its target on every render so
+        //    coverage submits per-stroke.
+        // TODO(m4-tessellation-cache): tessellate_stroke runs every frame
+        // for every stroke. Cache by (stroke.id, samples.len(), brush-hash,
+        // screen-scale bucket).
         let page_rect = Rect::from_origin_size((0.0, 0.0), snapshot.page.size);
-        for stroke in &snapshot.strokes {
-            let path = brush::tessellate_stroke(stroke, world_to_screen);
-            if path.elements().is_empty() {
-                continue;
-            }
-            let mut scene = Scene::new();
-            // Per-stroke clip respects the page's clip_to_bounds setting; the
-            // page rect is in world coords so we apply world_to_screen.
-            if snapshot.page.clip_to_bounds {
-                scene.push_layer(Mix::Clip, 1.0, world_to_screen, &page_rect);
-            }
-            scene.fill(Fill::NonZero, world_to_screen, Color::WHITE, None, &path);
-            if snapshot.page.clip_to_bounds {
-                scene.pop_layer();
-            }
-            self.vello
-                .render_to_texture(
-                    device,
-                    queue,
-                    &scene,
-                    compositor.coverage_view(),
-                    &RenderParams {
-                        base_color: Color::TRANSPARENT,
-                        width,
-                        height,
-                        antialiasing_method: AaConfig::Area,
-                    },
-                )
-                .map_err(|e| anyhow::anyhow!("Vello coverage render_to_texture: {e:?}"))?;
+        for layer in &snapshot.layers {
+            for stroke in &layer.strokes {
+                let path = brush::tessellate_stroke(stroke, world_to_screen);
+                if path.elements().is_empty() {
+                    continue;
+                }
+                let mut scene = Scene::new();
+                if snapshot.page.clip_to_bounds {
+                    scene.push_layer(Mix::Clip, 1.0, world_to_screen, &page_rect);
+                }
+                scene.fill(Fill::NonZero, world_to_screen, Color::WHITE, None, &path);
+                if snapshot.page.clip_to_bounds {
+                    scene.pop_layer();
+                }
+                self.vello
+                    .render_to_texture(
+                        device,
+                        queue,
+                        &scene,
+                        compositor.coverage_view(),
+                        &RenderParams {
+                            base_color: Color::TRANSPARENT,
+                            width,
+                            height,
+                            antialiasing_method: AaConfig::Area,
+                        },
+                    )
+                    .map_err(|e| anyhow::anyhow!("Vello coverage render_to_texture: {e:?}"))?;
 
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("aj-render brush-cmd"),
-            });
-            compositor.apply_stroke(device, queue, &mut encoder, stroke);
-            queue.submit(Some(encoder.finish()));
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("aj-render brush-cmd"),
+                });
+                compositor.apply_stroke(device, queue, &mut encoder, stroke, layer.id);
+                queue.submit(Some(encoder.finish()));
+            }
         }
 
-        // 3. Page chrome (border etc.) renders to a separate buffer that
-        // present composites on top of the substrate. Chrome bypasses brush
-        // programs because it isn't paint — it's an indicator the user reads
-        // as UI, not artwork.
+        // 3. Inter-layer composite: blend visible layers (and the active
+        //    stroke's layer regardless of visibility) into the accumulator
+        //    using each layer's BlendMode + opacity.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("aj-render composite-cmd"),
+        });
+        compositor.composite_layers(
+            device,
+            queue,
+            &mut encoder,
+            snapshot.layers.iter(),
+            snapshot.active_stroke_layer,
+        );
+        queue.submit(Some(encoder.finish()));
+
+        // 4. Page chrome (border etc.) renders to a separate buffer that
+        //    present composites on top of the canvas accumulator.
         let chrome_scene = build_chrome_scene(snapshot, world_to_screen);
         self.vello
             .render_to_texture(
@@ -128,7 +151,7 @@ impl Renderer {
             )
             .map_err(|e| anyhow::anyhow!("Vello chrome render_to_texture: {e:?}"))?;
 
-        // 4. Present: composite substrate over backdrop, chrome on top, sRGB-encode to surface.
+        // 5. Present: composite over backdrop, chrome on top, sRGB-encode to surface.
         let surface_view =
             surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

@@ -72,13 +72,6 @@ pub struct Stroke {
 
 /// Read-only view of the scene published to the renderer via `ArcSwap`. Includes
 /// page state so the renderer reads everything it needs from one snapshot.
-///
-/// **C1 transitional shape**: the snapshot carries both `layers` (the new
-/// source of truth) AND a flattened `strokes` view (visible-layer strokes
-/// concatenated bottom-to-top, plus the active mid-drag stroke). Today's
-/// renderer reads `strokes`; C2 cuts it over to `layers` and the flat field
-/// goes away. Engine cost is one extra Vec clone per snapshot — acceptable
-/// for one phase of churn-bounding.
 #[derive(Debug, Clone, Default)]
 pub struct SceneSnapshot {
     pub page: Page,
@@ -87,17 +80,24 @@ pub struct SceneSnapshot {
     /// The renderer does NOT read this; each `Stroke` carries its own
     /// `brush` frozen at `BeginStroke` time.
     pub brush: BrushParams,
-    /// Flat view of visible-layer strokes plus any active mid-drag stroke.
-    /// **Transitional in C1** — the renderer reads this; C2 deletes it in
-    /// favour of iterating `layers`.
-    pub strokes: Vec<Stroke>,
-    /// Full per-layer state. Empty `Vec` is a valid "no layers yet" state
-    /// only for the `Default` impl; once a `DocumentState` exists, snapshot
-    /// will always populate at least one layer.
+    /// Per-layer state, bottom-to-top. The active mid-drag stroke (if any)
+    /// is folded into its target layer's `strokes` so the renderer iterates
+    /// layers and strokes uniformly. Empty `Vec` is the `Default` shape
+    /// only; once a `DocumentState` exists, snapshot always populates at
+    /// least one layer.
     pub layers: Vec<Layer>,
     /// Which layer the next `BeginStroke` will target. UI reads this to
-    /// highlight the active row in the layers panel (C3).
+    /// highlight the active row in the layers panel.
     pub active_layer: LayerId,
+    /// Which layer the *current* mid-drag stroke targets (frozen at
+    /// `BeginStroke` time). `None` when no stroke is in flight. The
+    /// renderer treats `layer.visible || active_stroke_layer == Some(id)`
+    /// as the effective visibility for inter-layer compositing — hiding
+    /// a layer mid-drag must not make the in-flight stroke vanish under
+    /// the user's pen, but `Layer.visible` itself stays the user's source
+    /// of truth (the layers panel reads it directly to render the eye
+    /// icon). Mirrors the field of the same name on `DocumentState`.
+    pub active_stroke_layer: Option<LayerId>,
 }
 
 /// Authoritative mutable document state. Owned exclusively by the engine thread.
@@ -372,47 +372,44 @@ impl DocumentState {
         self.active.is_some()
     }
 
-    /// Builds a `SceneSnapshot` that includes the active (uncommitted) stroke
-    /// in the flat `strokes` view, so the drawing appears live while the
-    /// user is still dragging. The active stroke is placed in the active
-    /// layer's slot in the `layers` snapshot too, mirroring how the renderer
-    /// will see it once C2 cuts over.
-    ///
-    /// **Visibility quirk for the active stroke**: if the user hides the
-    /// active stroke's target layer mid-drag, the *committed* strokes on
-    /// that layer disappear from the flat view (correct), but the active
-    /// stroke itself stays visible — hiding the layer shouldn't make a
-    /// stroke-in-progress vanish under the user's pen. Treated as "in-flight
-    /// preview always renders" rather than a layer-level state thing.
+    /// Builds a `SceneSnapshot` that folds the active (uncommitted) stroke
+    /// into its target layer's strokes, so the drawing appears live while
+    /// the user is still dragging. The renderer reads `active_stroke_layer`
+    /// to keep the in-flight stroke visible even if the user hides its
+    /// target layer mid-drag — `Layer.visible` itself stays user-controlled,
+    /// the renderer just OR-folds it with the active-stroke layer check at
+    /// composite time.
     #[must_use]
     pub fn snapshot(&self) -> SceneSnapshot {
         let mut layers = self.layers.clone();
-        if let Some(active) = &self.active {
+        // Surface `active_stroke_layer` only when the target actually
+        // exists in `layers`. The fallback to `active_layer` covers a
+        // stray Some-with-stale-id case; if even that doesn't resolve we
+        // emit None rather than advertise an orphan id to the renderer
+        // (which would log-spam during composite).
+        let active_stroke_layer = if let Some(active) = &self.active {
             let target = self.active_stroke_layer.unwrap_or(self.active_layer);
             if let Some(layer) = layers.iter_mut().find(|l| l.id == target) {
                 layer.strokes.push(active.clone());
+                Some(target)
+            } else if let Some(layer) = layers.iter_mut().find(|l| l.id == self.active_layer) {
+                layer.strokes.push(active.clone());
+                Some(self.active_layer)
+            } else {
+                log::warn!(
+                    "snapshot: active stroke target {target:?} and active_layer both missing from layers"
+                );
+                None
             }
-        }
-        // Flat view: visible-layer committed strokes, bottom-to-top, then
-        // the active stroke on top regardless of its layer's visibility
-        // (see doc-comment quirk above). We re-flatten from `self.layers`
-        // (not `layers`) so the active stroke isn't double-counted on the
-        // visible path.
-        let mut strokes: Vec<Stroke> = self
-            .layers
-            .iter()
-            .filter(|l| l.visible)
-            .flat_map(|l| l.strokes.iter().cloned())
-            .collect();
-        if let Some(active) = &self.active {
-            strokes.push(active.clone());
-        }
+        } else {
+            None
+        };
         SceneSnapshot {
             page: self.page,
             brush: self.brush,
-            strokes,
             layers,
             active_layer: self.active_layer,
+            active_stroke_layer,
         }
     }
 
@@ -764,15 +761,24 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_includes_active_stroke_and_targets_layer_at_begin_time() {
+    fn snapshot_includes_active_stroke_in_target_layer() {
         let mut doc = DocumentState::new();
         doc.begin_stroke(stroke(7, &[(0.0, 0.0)]));
         let snap = doc.snapshot();
-        assert_eq!(snap.strokes.len(), 1);
-        assert_eq!(snap.strokes[0].id, StrokeId(7));
-        // Active stroke is in the layer that was active when begin_stroke ran.
+        // Active stroke is folded into the layer that was active when
+        // begin_stroke ran, AND active_stroke_layer surfaces that target
+        // for the renderer's effective-visibility check.
+        assert_eq!(snap.active_stroke_layer, Some(snap.active_layer));
         let layer = snap.layers.iter().find(|l| l.id == snap.active_layer).unwrap();
         assert_eq!(layer.strokes.len(), 1);
+        assert_eq!(layer.strokes[0].id, StrokeId(7));
+    }
+
+    #[test]
+    fn snapshot_active_stroke_layer_is_none_without_active_stroke() {
+        let doc = DocumentState::new();
+        let snap = doc.snapshot();
+        assert_eq!(snap.active_stroke_layer, None);
     }
 
     #[test]

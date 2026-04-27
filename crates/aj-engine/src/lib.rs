@@ -461,7 +461,10 @@ mod tests {
         assert!(!state.doc.has_active_stroke(), "cancel clears active stroke");
         let status = state.history.status();
         assert!(!status.can_undo, "cancel does not record a history entry");
-        assert!(state.snapshot().scene.strokes.is_empty(), "cancelled stroke not in snapshot");
+        assert!(
+            state.snapshot().scene.layers.iter().all(|l| l.strokes.is_empty()),
+            "cancelled stroke not in any layer's strokes"
+        );
     }
 
     #[test]

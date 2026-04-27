@@ -55,7 +55,7 @@ impl LayerId {
 /// forward-compatible at the wire — a document saved by a future build
 /// with an unrecognized blend mode loads as `Unknown` rather than
 /// hard-failing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[non_exhaustive]

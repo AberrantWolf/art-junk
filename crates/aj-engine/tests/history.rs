@@ -4,12 +4,20 @@
 use std::time::Duration;
 
 use aj_core::{
-    BrushParams, LayerId, Point, PointerId, Sample, SampleClass, SampleRevision, StrokeId, ToolCaps,
+    AppSnapshot, BrushParams, LayerId, Point, PointerId, Sample, SampleClass, SampleRevision,
+    Stroke, StrokeId, ToolCaps,
 };
 use aj_engine::{Command, EngineState, apply};
 
 fn sample_at(x: f64, y: f64) -> Sample {
     Sample::mouse(Point::new(x, y).into(), Duration::ZERO, PointerId::MOUSE)
+}
+
+/// Flatten all strokes from all layers in the published snapshot. The active
+/// mid-drag stroke is folded into its target layer's strokes by
+/// `DocumentState::snapshot()`, so iterating layers picks it up too.
+fn flat_strokes(snap: &AppSnapshot) -> Vec<&Stroke> {
+    snap.scene.layers.iter().flat_map(|l| l.strokes.iter()).collect()
 }
 
 fn draw_one(state: &mut EngineState, id: StrokeId) {
@@ -31,7 +39,7 @@ fn end_stroke_commits_to_history() {
     let mut state = EngineState::new();
     draw_one(&mut state, StrokeId(1));
     let snap = state.snapshot();
-    assert_eq!(snap.scene.strokes.len(), 1);
+    assert_eq!(flat_strokes(&snap).len(), 1);
     assert!(snap.history.can_undo);
     assert!(!snap.history.can_redo);
 }
@@ -43,14 +51,14 @@ fn undo_then_redo_restores_stroke() {
 
     apply(Command::Undo, &mut state);
     let after_undo = state.snapshot();
-    assert!(after_undo.scene.strokes.is_empty());
+    assert!(flat_strokes(&after_undo).is_empty());
     assert!(!after_undo.history.can_undo);
     assert!(after_undo.history.can_redo);
 
     apply(Command::Redo, &mut state);
     let after_redo = state.snapshot();
-    assert_eq!(after_redo.scene.strokes.len(), 1);
-    assert_eq!(after_redo.scene.strokes[0].id, StrokeId(1));
+    assert_eq!(flat_strokes(&after_redo).len(), 1);
+    assert_eq!(flat_strokes(&after_redo)[0].id, StrokeId(1));
     assert!(after_redo.history.can_undo);
     assert!(!after_redo.history.can_redo);
 }
@@ -71,7 +79,7 @@ fn undo_during_active_stroke_is_noop() {
     apply(Command::Undo, &mut state);
     let snap = state.snapshot();
     // Active stroke still visible in published snapshot.
-    assert_eq!(snap.scene.strokes.len(), 1);
+    assert_eq!(flat_strokes(&snap).len(), 1);
     // Nothing to undo — the active stroke wasn't committed.
     assert!(!snap.history.can_undo);
 }
@@ -85,8 +93,8 @@ fn new_commit_after_undo_truncates_redo() {
 
     draw_one(&mut state, StrokeId(2));
     let snap = state.snapshot();
-    assert_eq!(snap.scene.strokes.len(), 1);
-    assert_eq!(snap.scene.strokes[0].id, StrokeId(2));
+    assert_eq!(flat_strokes(&snap).len(), 1);
+    assert_eq!(flat_strokes(&snap)[0].id, StrokeId(2));
     assert!(!snap.history.can_redo);
 }
 
@@ -100,13 +108,13 @@ fn multi_step_undo_and_redo_preserve_order() {
     apply(Command::Undo, &mut state);
     apply(Command::Undo, &mut state);
     let snap = state.snapshot();
-    assert_eq!(snap.scene.strokes.len(), 1);
-    assert_eq!(snap.scene.strokes[0].id, StrokeId(1));
+    assert_eq!(flat_strokes(&snap).len(), 1);
+    assert_eq!(flat_strokes(&snap)[0].id, StrokeId(1));
 
     apply(Command::Redo, &mut state);
     let snap = state.snapshot();
     assert_eq!(
-        snap.scene.strokes.iter().map(|s| s.id).collect::<Vec<_>>(),
+        flat_strokes(&snap).iter().map(|s| s.id).collect::<Vec<_>>(),
         vec![StrokeId(1), StrokeId(2)],
     );
 }
@@ -117,7 +125,7 @@ fn redo_without_prior_undo_is_noop() {
     draw_one(&mut state, StrokeId(1));
     apply(Command::Redo, &mut state);
     let snap = state.snapshot();
-    assert_eq!(snap.scene.strokes.len(), 1);
+    assert_eq!(flat_strokes(&snap).len(), 1);
     assert!(!snap.history.can_redo);
 }
 
@@ -153,8 +161,8 @@ fn revise_sample_before_commit_is_folded_into_history_snapshot() {
     apply(Command::EndStroke { id }, &mut state);
 
     let snap = state.snapshot();
-    assert_eq!(snap.scene.strokes.len(), 1);
-    let stroke = &snap.scene.strokes[0];
+    assert_eq!(flat_strokes(&snap).len(), 1);
+    let stroke = &flat_strokes(&snap)[0];
     assert!((stroke.samples[0].pressure - 0.8).abs() < f32::EPSILON);
     assert_eq!(stroke.samples[0].class, SampleClass::Committed);
 }

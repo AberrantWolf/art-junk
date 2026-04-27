@@ -222,4 +222,72 @@ mod tests {
         // Specifically, B = 1 * 0.5 * 0.5 = 0.25 after two full passes.
         assert!((after_two.2 - 0.25).abs() < 1e-6);
     }
+
+    /// CPU mirror of `shaders/blend_normal.wgsl`. Inter-layer Normal blend
+    /// with per-layer opacity. `below` is the composite accumulator,
+    /// `layer` is the layer's substrate; both straight-alpha linear RGB.
+    fn apply_blend_normal(
+        below: (f32, f32, f32, f32),
+        layer: (f32, f32, f32, f32),
+        opacity: f32,
+    ) -> (f32, f32, f32, f32) {
+        let t = (layer.3 * opacity).clamp(0.0, 1.0);
+        let new_r = below.0 * (1.0 - t) + layer.0 * t;
+        let new_g = below.1 * (1.0 - t) + layer.1 * t;
+        let new_b = below.2 * (1.0 - t) + layer.2 * t;
+        let new_a = below.3 + (1.0 - below.3) * t;
+        (new_r, new_g, new_b, new_a)
+    }
+
+    /// Layer with full alpha + full opacity completely covers below — the
+    /// invariant the present pass relies on for opaque foreground layers.
+    #[test]
+    fn blend_normal_full_layer_full_opacity_replaces_below() {
+        let below = (0.5, 0.5, 0.5, 0.5);
+        let layer = (1.0, 0.2, 0.0, 1.0);
+        let out = apply_blend_normal(below, layer, 1.0);
+        assert!((out.0 - 1.0).abs() < f32::EPSILON);
+        assert!((out.1 - 0.2).abs() < f32::EPSILON);
+        assert!((out.2 - 0.0).abs() < f32::EPSILON);
+        assert!((out.3 - 1.0).abs() < f32::EPSILON);
+    }
+
+    /// Layer with zero alpha leaves below unchanged regardless of opacity.
+    #[test]
+    fn blend_normal_zero_layer_alpha_passes_below_through() {
+        let below = (0.5, 0.5, 0.5, 0.5);
+        let layer = (1.0, 0.0, 0.0, 0.0);
+        let out = apply_blend_normal(below, layer, 1.0);
+        assert!((out.0 - below.0).abs() < f32::EPSILON);
+        assert!((out.1 - below.1).abs() < f32::EPSILON);
+        assert!((out.2 - below.2).abs() < f32::EPSILON);
+        assert!((out.3 - below.3).abs() < f32::EPSILON);
+    }
+
+    /// Per-layer opacity attenuates how much of the layer shows through —
+    /// not by darkening the layer's color, but by letting more of below
+    /// remain. At opacity=0.5 over a full-alpha layer, the result is the
+    /// straight midpoint between below.rgb and layer.rgb.
+    #[test]
+    fn blend_normal_opacity_attenuates_layer_visibility() {
+        let below = (0.0, 0.0, 0.0, 1.0); // black
+        let layer = (1.0, 1.0, 1.0, 1.0); // white
+        let out = apply_blend_normal(below, layer, 0.5);
+        assert!((out.0 - 0.5).abs() < f32::EPSILON);
+        assert!((out.1 - 0.5).abs() < f32::EPSILON);
+        assert!((out.2 - 0.5).abs() < f32::EPSILON);
+    }
+
+    /// Compositing onto a transparent below preserves the layer's RGB
+    /// exactly — the invariant for "this is the only visible layer."
+    #[test]
+    fn blend_normal_transparent_below_preserves_layer() {
+        let below = (0.0, 0.0, 0.0, 0.0);
+        let layer = (0.7, 0.3, 0.5, 0.8);
+        let out = apply_blend_normal(below, layer, 1.0);
+        // mix(0, 0.7, 0.8) = 0.56
+        assert!((out.0 - 0.56).abs() < 1e-6);
+        // alpha: 0 + (1 - 0) * 0.8 = 0.8
+        assert!((out.3 - 0.8).abs() < 1e-6);
+    }
 }

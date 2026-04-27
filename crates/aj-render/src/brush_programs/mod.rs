@@ -1,51 +1,52 @@
-//! Stroke compositor: per-stroke deposit into a linear-RGB substrate.
+//! Stroke compositor: per-layer substrates + inter-layer composite.
 //!
-//! ## Substrate
+//! ## Substrates (per-layer)
 //!
-//! A per-frame `Rgba16Float` "substrate" texture represents the canvas.
-//! Cleared at frame start to `(1, 1, 1, 0)` — white paper, alpha = 0
-//! ("no paint here yet"). Strokes deposit in z-order: each runs a brush-
-//! specific fragment program that reads the current substrate and writes
-//! the new substrate value. A final present pass composites the substrate
-//! over the surface backdrop and sRGB-encodes for display.
+//! Each layer in the snapshot owns its own `Rgba16Float` substrate texture
+//! (ping-pong, for the brush program read/write swap). Substrates are
+//! cached across frames keyed by `LayerId`; allocate-if-missing at
+//! `begin_frame`, GC orphan substrates whose layer is no longer in the
+//! snapshot. Cleared per frame to `(1, 1, 1, 0)` — white paper, alpha = 0.
 //!
 //! ## Brush programs
 //!
-//! Two programs ship in Phase A:
+//! Three programs: **plain** (linear-RGB alpha-over), **highlighter**
+//! (multiplicative tint), **pigment** (Kubelka–Munk K/S in 7-band space).
+//! All share one bind-group layout and one uniform buffer; pipeline switch
+//! at `apply_stroke` is the only per-program difference. Adding a new brush
+//! program is a new WGSL file plus one pipeline registration.
 //!
-//! - **Plain alpha-over** — straight-alpha lerp in linear RGB.
-//! - **Pigment** — Kubelka–Munk K/S mix in 7-band reflectance space, with
-//!   the substrate's RGB upsampled to bands at read time and the result
-//!   integrated back to linear RGB before write. "Already dried" — no
-//!   wet-on-wet diffusion; each stroke commits against the current
-//!   substrate state.
+//! ## Inter-layer composite
 //!
-//! Both programs share one bind-group layout and one uniform buffer; the
-//! pipeline switch at `apply_stroke` is the only per-program difference.
-//! Adding a new brush program is a new WGSL file plus one extra pipeline.
+//! After all strokes deposit, an inter-layer composite pass walks visible
+//! layers bottom-to-top, blending each layer's substrate into a `composite`
+//! ping-pong accumulator. Each `BlendMode` is its own WGSL fragment program;
+//! `BlendMode::Normal` ships in C2, `OklabMix` in C4. Per-layer `opacity`
+//! modulates the blend weight. The active-stroke's layer is force-included
+//! in the composite even if `visible = false`, so hiding a layer mid-drag
+//! doesn't make the in-flight stroke vanish under the user's pen.
 //!
-//! ## Ping-pong
+//! ## Present
 //!
-//! The brush fragment shaders read the substrate and write it. A render
-//! attachment can't simultaneously be sampled, so we keep two copies of
-//! the substrate and swap which side is "front" after each deposit.
-//! `front_idx` tracks the side holding the most recent stroke's output.
+//! Final pass composites the accumulator over the surface backdrop in
+//! linear RGB, sRGB-encodes for the `*_Unorm` surface, and overlays chrome
+//! (page border, future on-canvas guides). Output is what the user sees,
+//! before egui chrome paints on top.
 //!
 //! ## Why fragment passes (not compute)
 //!
 //! Compute storage textures gate behind device features that aren't
 //! always available on WebGPU. Fragment-attachment writes work everywhere.
-//! The shader pair is small enough that the extra rasterizer hop is
-//! irrelevant to frame budget.
 
-use aj_core::{BrushType, LinearRgba, Stroke};
+use std::collections::HashMap;
+
+use aj_core::{BlendMode, BrushType, Layer, LayerId, LinearRgba, Stroke};
 use bytemuck::{Pod, Zeroable};
 
 mod parity;
 
-/// Substrate format. `Rgba16Float` gives K/S round-trip headroom and
-/// avoids 8-bit banding from per-stroke read-modify-write. Memory cost is
-/// 2× over `Rgba8` at our resolutions; immaterial.
+/// Substrate + composite format. `Rgba16Float` gives K/S round-trip
+/// headroom and avoids 8-bit banding from per-stroke read-modify-write.
 const SUBSTRATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Format Vello demands for `render_to_texture` (storage + render
@@ -58,28 +59,32 @@ const CHROME_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 const TEXTURE_LABEL: &str = "aj-render substrate";
 
-/// Uniforms uploaded once per stroke. Layout matches the WGSL `Uniforms`
-/// struct in `shaders/{plain,pigment}.wgsl`. `_pad` is explicit so std140
-/// alignment isn't subject to compiler whim.
+/// Brush uniforms uploaded once per stroke. Layout matches the WGSL
+/// `Uniforms` struct in `shaders/{plain,highlighter,pigment}.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct BrushUniforms {
-    /// Linear RGB of the brush color (used by plain).
     brush_lin: [f32; 4],
-    /// 7-band reflectance bands 0..3 (used by pigment).
     brush_lo: [f32; 4],
-    /// Bands 4..6 in xyz (w unused).
     brush_hi: [f32; 4],
-    /// Overall stroke alpha — multiplied into per-pixel coverage to form
-    /// the mix weight `t`.
     brush_alpha: f32,
     _pad: [f32; 3],
 }
 
-/// Compute the brush's per-band reflectance by routing the brush color
-/// through the same spectral upsample the pigment shader uses on the
-/// canvas side. Mirrors `aj_core::pigment::Pigment::from_linear_rgb`
-/// precisely; the parity test in `parity.rs` enforces no drift.
+/// Inter-layer blend uniforms uploaded once per visible layer at composite
+/// time.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct BlendUniforms {
+    /// Per-layer opacity, multiplied into the per-pixel substrate alpha at
+    /// blend time. `0.0` makes the layer invisible (a no-op blend); `1.0`
+    /// uses the substrate alpha as-is.
+    opacity: f32,
+    _pad: [f32; 3],
+}
+
+/// Compute the brush's per-band reflectance for the pigment shader, plus
+/// the linear RGB payload the plain/highlighter shaders use.
 fn brush_uniforms(color: LinearRgba) -> BrushUniforms {
     let p = aj_core::Pigment::from_linear_rgb(LinearRgba::new(color.r, color.g, color.b, 1.0));
     let bands = parity::pigment_canvas_reflectance(&p);
@@ -92,16 +97,26 @@ fn brush_uniforms(color: LinearRgba) -> BrushUniforms {
     }
 }
 
+/// One layer's substrate ping-pong. Two textures so the brush program can
+/// read from one side and write the other within the same render pass; the
+/// host swaps `front_idx` after each deposit.
+struct LayerSubstrate {
+    /// Owns the underlying textures so the views below remain valid for the
+    /// lifetime of this struct. The compositor never accesses them
+    /// directly — all reads/writes go through `views`.
+    #[allow(dead_code)]
+    textures: [wgpu::Texture; 2],
+    views: [wgpu::TextureView; 2],
+    front_idx: usize,
+}
+
 pub struct StrokeCompositor {
     width: u32,
     height: u32,
 
-    substrate: [wgpu::Texture; 2],
-    substrate_views: [wgpu::TextureView; 2],
-    /// Side currently holding the most-recent stroke state. Reads consume
-    /// `front_idx`; writes target `1 - front_idx`. Swapped after each
-    /// `apply_stroke`.
-    front_idx: usize,
+    /// Per-layer substrate cache. Keyed by `LayerId`; allocate-if-missing
+    /// at `begin_frame`, drop orphans whose layer is no longer present.
+    substrates: HashMap<LayerId, LayerSubstrate>,
 
     coverage: wgpu::Texture,
     coverage_view: wgpu::TextureView,
@@ -109,18 +124,33 @@ pub struct StrokeCompositor {
     chrome: wgpu::Texture,
     chrome_view: wgpu::TextureView,
 
+    /// Inter-layer composite accumulator, ping-pong. Each layer's blend
+    /// reads `composite[front]` + the layer's substrate, writes
+    /// `composite[1-front]`, swaps. Both sides cleared at `begin_frame`
+    /// so a frame with zero visible layers presents transparent (the
+    /// backdrop shows through).
+    composite: [wgpu::Texture; 2],
+    composite_views: [wgpu::TextureView; 2],
+    composite_front_idx: usize,
+
     brush_bgl: wgpu::BindGroupLayout,
     brush_uniform_buf: wgpu::Buffer,
     plain_pipeline: wgpu::RenderPipeline,
     highlighter_pipeline: wgpu::RenderPipeline,
     pigment_pipeline: wgpu::RenderPipeline,
 
+    blend_bgl: wgpu::BindGroupLayout,
+    blend_uniform_buf: wgpu::Buffer,
+    /// Pipeline per `BlendMode`. C2 ships only `Normal`. `Unknown` and any
+    /// not-yet-shipping variant fall back to `Normal` at composite time.
+    blend_pipelines: HashMap<BlendMode, wgpu::RenderPipeline>,
+
     present_bgl: wgpu::BindGroupLayout,
     present_pipeline: wgpu::RenderPipeline,
 }
 
 impl StrokeCompositor {
-    #[allow(clippy::too_many_lines)] // pipeline-construction boilerplate; splitting hurts readability without removing complexity.
+    #[allow(clippy::too_many_lines)] // pipeline-construction boilerplate.
     pub fn new(
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
@@ -129,9 +159,9 @@ impl StrokeCompositor {
     ) -> Self {
         let (w, h) = (width.max(1), height.max(1));
 
-        let (substrate, substrate_views) = make_substrate_pair(device, w, h);
         let (coverage, coverage_view) = make_coverage(device, w, h);
         let (chrome, chrome_view) = make_chrome(device, w, h);
+        let (composite, composite_views) = make_composite_pair(device, w, h);
 
         let brush_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("aj-render brush uniforms"),
@@ -139,22 +169,27 @@ impl StrokeCompositor {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let blend_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("aj-render blend uniforms"),
+            size: std::mem::size_of::<BlendUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let brush_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("aj-render brush bgl"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                uniform_entry(0),
                 texture_entry(1), // coverage
                 texture_entry(2), // substrate (read)
+            ],
+        });
+        let blend_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("aj-render blend bgl"),
+            entries: &[
+                uniform_entry(0),
+                texture_entry(1), // composite_below
+                texture_entry(2), // layer_above (this layer's substrate)
             ],
         });
 
@@ -170,6 +205,10 @@ impl StrokeCompositor {
             label: Some("aj-render pigment brush shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/pigment.wgsl").into()),
         });
+        let blend_normal_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("aj-render blend-normal shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blend_normal.wgsl").into()),
+        });
 
         let brush_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -177,24 +216,43 @@ impl StrokeCompositor {
                 bind_group_layouts: &[&brush_bgl],
                 push_constant_ranges: &[],
             });
-        let plain_pipeline = make_brush_pipeline(
+        let blend_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("aj-render blend pipeline layout"),
+                bind_group_layouts: &[&blend_bgl],
+                push_constant_ranges: &[],
+            });
+
+        let plain_pipeline = make_substrate_pipeline(
             device,
             "aj-render plain pipeline",
             &brush_pipeline_layout,
             &plain_shader,
         );
-        let highlighter_pipeline = make_brush_pipeline(
+        let highlighter_pipeline = make_substrate_pipeline(
             device,
             "aj-render highlighter pipeline",
             &brush_pipeline_layout,
             &highlighter_shader,
         );
-        let pigment_pipeline = make_brush_pipeline(
+        let pigment_pipeline = make_substrate_pipeline(
             device,
             "aj-render pigment pipeline",
             &brush_pipeline_layout,
             &pigment_shader,
         );
+        let blend_normal_pipeline = make_substrate_pipeline(
+            device,
+            "aj-render blend-normal pipeline",
+            &blend_pipeline_layout,
+            &blend_normal_shader,
+        );
+
+        let mut blend_pipelines: HashMap<BlendMode, wgpu::RenderPipeline> = HashMap::new();
+        blend_pipelines.insert(BlendMode::Normal, blend_normal_pipeline);
+        // BlendMode::Unknown intentionally absent from the map; lookup
+        // failures fall back to Normal at composite time, mirroring the
+        // BrushType::Unknown → plain fallback.
 
         let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("aj-render present shader"),
@@ -239,18 +297,22 @@ impl StrokeCompositor {
         Self {
             width: w,
             height: h,
-            substrate,
-            substrate_views,
-            front_idx: 0,
+            substrates: HashMap::new(),
             coverage,
             coverage_view,
             chrome,
             chrome_view,
+            composite,
+            composite_views,
+            composite_front_idx: 0,
             brush_bgl,
             brush_uniform_buf,
             plain_pipeline,
             highlighter_pipeline,
             pigment_pipeline,
+            blend_bgl,
+            blend_uniform_buf,
+            blend_pipelines,
             present_bgl,
             present_pipeline,
         }
@@ -261,16 +323,21 @@ impl StrokeCompositor {
         if self.width == w && self.height == h {
             return;
         }
-        let (substrate, substrate_views) = make_substrate_pair(device, w, h);
+        // Drop everything; substrates re-allocate at new size on next
+        // begin_frame's alloc-if-missing pass. Composite + coverage +
+        // chrome are reallocated up-front since they're shared (not
+        // per-layer).
+        self.substrates.clear();
         let (coverage, coverage_view) = make_coverage(device, w, h);
         let (chrome, chrome_view) = make_chrome(device, w, h);
-        self.substrate = substrate;
-        self.substrate_views = substrate_views;
+        let (composite, composite_views) = make_composite_pair(device, w, h);
         self.coverage = coverage;
         self.coverage_view = coverage_view;
         self.chrome = chrome;
         self.chrome_view = chrome_view;
-        self.front_idx = 0;
+        self.composite = composite;
+        self.composite_views = composite_views;
+        self.composite_front_idx = 0;
         self.width = w;
         self.height = h;
     }
@@ -280,37 +347,64 @@ impl StrokeCompositor {
         &self.coverage_view
     }
 
-    /// Chrome view that Vello should target for page decorations (border,
-    /// future on-canvas guides). Rendered once per frame after all strokes;
-    /// composited on top of the substrate at present time.
+    /// Chrome view that Vello should target for page decorations.
     pub fn chrome_view(&self) -> &wgpu::TextureView {
         &self.chrome_view
     }
 
-    /// Clear all transient buffers to their per-frame initial state. Both
-    /// substrate ping-pong sides clear so the first deposit's read side is
-    /// valid.
-    pub fn begin_frame(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        for side in 0..2 {
-            // Substrate clears to white-paper-no-paint. RGB = white so an
-            // initial pigment stroke (which K/S-mixes against the substrate
-            // RGB) sees the correct paper baseline; alpha = 0 says "no
-            // paint here yet" so the present pass shows the backdrop.
-            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("aj-render substrate clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.substrate_views[side],
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 1.0, b: 1.0, a: 0.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+    /// Per-frame setup: ensure a substrate exists for every `LayerId` in
+    /// `keep`, drop orphans, clear all substrates + the chrome buffer +
+    /// both composite ping-pong sides. `keep` is typically the snapshot's
+    /// layer ids plus the active-stroke's layer (defensive — should be a
+    /// subset of layer ids, but the active-stroke target falling outside
+    /// `snapshot.layers` would orphan its substrate mid-drag).
+    pub fn begin_frame(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        keep: &[LayerId],
+    ) {
+        // 1. GC orphan substrates whose ids aren't in `keep`.
+        self.substrates.retain(|id, _| keep.contains(id));
+
+        // 2. Allocate-if-missing for every kept id, then clear both ping-
+        //    pong sides of every substrate. We clear both sides so the
+        //    first `apply_stroke` against this layer reads a valid white-
+        //    paper canvas regardless of front_idx.
+        for &id in keep {
+            self.substrates
+                .entry(id)
+                .or_insert_with(|| make_layer_substrate(device, self.width, self.height));
         }
+        for sub in self.substrates.values_mut() {
+            for side in 0..2 {
+                let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("aj-render substrate clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &sub.views[side],
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            // RGB = white paper (so an initial pigment
+                            // stroke against this canvas sees the right
+                            // baseline); alpha = 0 says "no paint".
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 1.0,
+                                g: 1.0,
+                                b: 1.0,
+                                a: 0.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+            }
+            sub.front_idx = 0;
+        }
+
+        // 3. Clear chrome.
         let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("aj-render chrome clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -325,24 +419,54 @@ impl StrokeCompositor {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        self.front_idx = 0;
+
+        // 4. Clear both composite ping-pong sides. Cleared regardless so a
+        //    frame with zero visible layers presents transparent (backdrop
+        //    shows through) instead of stale composite from the previous
+        //    frame.
+        for side in 0..2 {
+            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("aj-render composite clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.composite_views[side],
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+        self.composite_front_idx = 0;
     }
 
-    /// Run the brush program for `stroke` against the substrate. The caller
-    /// has already rendered this stroke's coverage into
-    /// [`coverage_view`](Self::coverage_view). Reads the "front" substrate
-    /// side, writes "back", swaps.
+    /// Run the brush program for `stroke` against the named layer's
+    /// substrate. The caller has already rasterised this stroke's coverage
+    /// into [`coverage_view`](Self::coverage_view). Reads the layer's
+    /// "front" substrate, writes "back", swaps `front_idx` after the pass.
+    /// Returns silently (warns) if `target` is missing — should not happen
+    /// in practice because `begin_frame` allocated for every layer in the
+    /// snapshot.
     pub fn apply_stroke(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         stroke: &Stroke,
+        target: LayerId,
     ) {
+        let Some(sub) = self.substrates.get_mut(&target) else {
+            log::warn!("apply_stroke: no substrate for layer {target:?}; stroke skipped");
+            return;
+        };
+
         let uniforms = brush_uniforms(stroke.brush.color);
         queue.write_buffer(&self.brush_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
-        let read = self.front_idx;
+        let read = sub.front_idx;
         let write = 1 - read;
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -359,18 +483,16 @@ impl StrokeCompositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.substrate_views[read]),
+                    resource: wgpu::BindingResource::TextureView(&sub.views[read]),
                 },
             ],
         });
 
-        // BrushType selects the program. `Unknown` (forward-compat fallback
-        // for documents written by future builds) renders as plain — the
-        // safe default that won't crash a load and matches the doc on
-        // `BrushType::Unknown`.
         let pipeline = match stroke.brush.brush_type {
             BrushType::Highlighter => &self.highlighter_pipeline,
             BrushType::Pigment => &self.pigment_pipeline,
+            // BrushType::Normal and forward-compat Unknown both render as
+            // plain alpha-over (the safe default).
             _ => &self.plain_pipeline,
         };
 
@@ -378,7 +500,7 @@ impl StrokeCompositor {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("aj-render brush pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.substrate_views[write],
+                    view: &sub.views[write],
                     resolve_target: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                 })],
@@ -391,11 +513,91 @@ impl StrokeCompositor {
             pass.draw(0..3, 0..1);
         }
 
-        self.front_idx = write;
+        sub.front_idx = write;
     }
 
-    /// Composite substrate over backdrop and chrome on top, sRGB-encode to
-    /// the surface. Final pass before egui chrome overlays.
+    /// Walk visible layers bottom-to-top, blending each into the composite
+    /// accumulator using its `BlendMode` and `opacity`. The active stroke's
+    /// target layer is force-included even if `visible = false`, so an
+    /// in-flight stroke stays visible when the user toggles its layer's
+    /// visibility off.
+    pub fn composite_layers<'a, I>(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        layers: I,
+        active_stroke_layer: Option<LayerId>,
+    ) where
+        I: IntoIterator<Item = &'a Layer>,
+    {
+        for layer in layers {
+            let effective_visible = layer.visible || active_stroke_layer == Some(layer.id);
+            if !effective_visible {
+                continue;
+            }
+            let Some(sub) = self.substrates.get(&layer.id) else {
+                log::warn!("composite_layers: no substrate for layer {:?}; skipped", layer.id);
+                continue;
+            };
+
+            // Pipeline lookup: Unknown blend mode falls back to Normal.
+            let pipeline = self
+                .blend_pipelines
+                .get(&layer.blend_mode)
+                .or_else(|| self.blend_pipelines.get(&BlendMode::Normal))
+                .expect("Normal blend pipeline always present");
+
+            let uniforms = BlendUniforms { opacity: layer.opacity.clamp(0.0, 1.0), _pad: [0.0; 3] };
+            queue.write_buffer(&self.blend_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+            let read = self.composite_front_idx;
+            let write = 1 - read;
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("aj-render blend bg"),
+                layout: &self.blend_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.blend_uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&self.composite_views[read]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&sub.views[sub.front_idx]),
+                    },
+                ],
+            });
+
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("aj-render blend pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.composite_views[write],
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+
+            self.composite_front_idx = write;
+        }
+    }
+
+    /// Composite-over-backdrop in linear → sRGB → chrome on top → surface.
     pub fn present(
         &self,
         device: &wgpu::Device,
@@ -409,7 +611,7 @@ impl StrokeCompositor {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(
-                        &self.substrate_views[self.front_idx],
+                        &self.composite_views[self.composite_front_idx],
                     ),
                 },
                 wgpu::BindGroupEntry {
@@ -438,7 +640,7 @@ impl StrokeCompositor {
     }
 }
 
-fn make_brush_pipeline(
+fn make_substrate_pipeline(
     device: &wgpu::Device,
     label: &str,
     layout: &wgpu::PipelineLayout,
@@ -471,6 +673,19 @@ fn make_brush_pipeline(
     })
 }
 
+fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -484,13 +699,34 @@ fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn make_substrate_pair(
+fn make_layer_substrate(device: &wgpu::Device, w: u32, h: u32) -> LayerSubstrate {
+    let make = |idx: usize| {
+        let label = format!("{TEXTURE_LABEL}-layer-{idx}");
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&label),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: SUBSTRATE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    };
+    let (t0, v0) = make(0);
+    let (t1, v1) = make(1);
+    LayerSubstrate { textures: [t0, t1], views: [v0, v1], front_idx: 0 }
+}
+
+fn make_composite_pair(
     device: &wgpu::Device,
     w: u32,
     h: u32,
 ) -> ([wgpu::Texture; 2], [wgpu::TextureView; 2]) {
     let make = |idx: usize| {
-        let label = format!("{TEXTURE_LABEL}-{idx}");
+        let label = format!("aj-render composite-{idx}");
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&label),
             size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },

@@ -1,14 +1,15 @@
-// Composite the substrate and chrome onto the surface.
+// Composite the inter-layer composite accumulator and chrome onto the surface.
 //
-// Substrate stores straight-alpha linear RGB. We composite it over the
-// backdrop in linear space (the right place to do alpha blending), then
-// sRGB-encode for the *_Unorm surface. Chrome (page border, future UI
-// decorations) is rendered by Vello to an `Rgba8Unorm` texture; per Vello
-// convention, those bytes are already sRGB-encoded with straight alpha,
-// so we composite chrome on top in sRGB space after encoding the
-// substrate stage.
+// `composite` is the accumulator output of the per-layer blend pass — straight-
+// alpha linear RGB representing every layer's substrate blended together via
+// the per-mode blend shaders. We composite it over the backdrop in linear
+// space (the right place to do alpha blending), then sRGB-encode for the
+// *_Unorm surface. Chrome (page border, future UI decorations) is rendered by
+// Vello to an `Rgba8Unorm` texture; per Vello convention, those bytes are
+// already sRGB-encoded with straight alpha, so we composite chrome on top in
+// sRGB space after encoding the canvas stage.
 
-@group(0) @binding(0) var substrate: texture_2d<f32>;
+@group(0) @binding(0) var composite: texture_2d<f32>;
 @group(0) @binding(1) var chrome: texture_2d<f32>;
 
 // Dark surface backdrop the canvas sits on top of. Stored as the sRGB
@@ -49,8 +50,8 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(in.pos.xy);
 
-    // Substrate-over-backdrop in linear, then sRGB-encode.
-    let s = textureLoad(substrate, coord, 0);
+    // Composite-over-backdrop in linear, then sRGB-encode.
+    let s = textureLoad(composite, coord, 0);
     let backdrop_lin = vec3<f32>(
         srgb_to_linear_channel(BACKDROP_SRGB.x),
         srgb_to_linear_channel(BACKDROP_SRGB.y),
@@ -63,7 +64,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         linear_to_srgb_channel(composed_lin.z),
     );
 
-    // Chrome-over-(substrate+backdrop) in sRGB. Vello's fine shader
+    // Chrome-over-(composite+backdrop) in sRGB. Vello's fine shader
     // unpremultiplies before textureStore (vello_shaders/shader/fine.wgsl),
     // so chrome.rgb is straight sRGB and `mix` is the correct alpha-over.
     let c = textureLoad(chrome, coord, 0);
