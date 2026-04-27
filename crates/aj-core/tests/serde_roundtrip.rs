@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use aj_core::{
-    BrushParams, DocumentSnapshot, DocumentState, Edit, LinearRgba, MixingMode, Page, PointerId,
+    BrushParams, BrushType, DocumentSnapshot, DocumentState, Edit, LinearRgba, Page, PointerId,
     PressureCurve, Sample, Size, Stroke, StrokeId, ToolCaps,
 };
 
@@ -33,7 +33,7 @@ fn snapshot_fixture() -> DocumentSnapshot {
             max_width: 12.0,
             curve: PressureCurve::Linear,
             color: LinearRgba::from_srgb8([200, 80, 40, 255]),
-            mixing_mode: MixingMode::Additive,
+            brush_type: BrushType::Normal,
         },
         strokes: vec![
             Stroke {
@@ -170,40 +170,40 @@ fn brush_params_roundtrips() {
         max_width: 7.5,
         curve: PressureCurve::Linear,
         color: LinearRgba::from_srgb8([240, 120, 30, 255]),
-        mixing_mode: MixingMode::Additive,
+        brush_type: BrushType::Normal,
     };
     let got: BrushParams = cbor_roundtrip(&b);
     assert_eq!(got, b);
 }
 
 #[test]
-fn mixing_mode_roundtrips() {
-    for mode in [MixingMode::Additive, MixingMode::Pigment] {
-        let got: MixingMode = cbor_roundtrip(&mode);
+fn brush_type_roundtrips() {
+    for mode in [BrushType::Normal, BrushType::Pigment] {
+        let got: BrushType = cbor_roundtrip(&mode);
         assert_eq!(got, mode);
     }
 }
 
 /// Forward-compat fence: a CBOR blob written by a hypothetical future build
-/// with an unrecognized `mixing_mode` string (`latent_pigment` here) must
-/// deserialize into `MixingMode::Unknown` rather than hard-fail. Without
+/// with an unrecognized `brush_type` string (`latent_pigment` here) must
+/// deserialize into `BrushType::Unknown` rather than hard-fail. Without
 /// `#[serde(other)]` on the enum this test would error at deserialize time.
 #[test]
-fn unknown_mixing_mode_variant_falls_back_to_unknown() {
+fn unknown_brush_type_variant_falls_back_to_unknown() {
     // Tag-only enum encodes as a string in CBOR. We hand-craft a payload
     // matching the serde "snake_case" external-tag form for an enum variant.
     let mut bytes = Vec::new();
     ciborium::into_writer(&"latent_pigment", &mut bytes).expect("serialize string");
-    let got: MixingMode = ciborium::from_reader(bytes.as_slice()).expect("deserialize unknown");
-    assert_eq!(got, MixingMode::Unknown);
+    let got: BrushType = ciborium::from_reader(bytes.as_slice()).expect("deserialize unknown");
+    assert_eq!(got, BrushType::Unknown);
 }
 
-/// Fence: a CBOR blob minted without the `mixing_mode` key (i.e. one produced
+/// Fence: a CBOR blob minted without the `brush_type` key (i.e. one produced
 /// by a pre-field version of this schema) must still deserialize into a
-/// current `BrushParams`, with `mixing_mode` defaulted to `Additive`. Without
+/// current `BrushParams`, with `brush_type` defaulted to `Normal`. Without
 /// `#[serde(default)]` on the field this test would fail with "missing field".
 #[test]
-fn brush_params_deserializes_legacy_blob_without_mixing_mode() {
+fn brush_params_deserializes_legacy_blob_without_brush_type() {
     #[derive(serde::Serialize)]
     #[serde(rename_all = "snake_case")]
     struct LegacyBrushParams {
@@ -228,5 +228,5 @@ fn brush_params_deserializes_legacy_blob_without_mixing_mode() {
     assert!((got.max_width - 4.0).abs() < f32::EPSILON);
     assert_eq!(got.curve, PressureCurve::Linear);
     assert_eq!(got.color.to_srgb8(), [0, 200, 220, 255]);
-    assert_eq!(got.mixing_mode, MixingMode::Additive);
+    assert_eq!(got.brush_type, BrushType::Normal);
 }

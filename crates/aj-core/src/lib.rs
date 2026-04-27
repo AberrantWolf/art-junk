@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub mod input;
 pub mod pigment;
 
-pub use input::{BrushParams, LinearRgba, MAX_WIDTH_MAX, MAX_WIDTH_MIN, MixingMode, PressureCurve};
+pub use input::{BrushParams, BrushType, LinearRgba, MAX_WIDTH_MAX, MAX_WIDTH_MIN, PressureCurve};
 pub use pigment::{KubelkaMunk, MixOp, Pigment};
 // Input-sample types live in `stylus-junk`; re-export so existing aj-core
 // consumers keep working with their current import paths.
@@ -160,6 +160,14 @@ impl DocumentState {
     /// the engine does no further validation — clamp lives at the boundary.
     pub fn set_brush_color(&mut self, color: LinearRgba) {
         self.brush.color = color;
+    }
+
+    /// Set the brush's type. Affects only future strokes — in-flight strokes
+    /// carry their `Stroke::brush.brush_type` frozen at `BeginStroke` time,
+    /// mirroring the live-vs-frozen pattern that already applies to width and
+    /// color.
+    pub fn set_brush_type(&mut self, brush_type: BrushType) {
+        self.brush.brush_type = brush_type;
     }
 
     pub fn begin_stroke(&mut self, stroke: Stroke) {

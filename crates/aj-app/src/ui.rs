@@ -7,7 +7,7 @@
 pub mod brush_panel;
 pub mod color_picker;
 
-use aj_core::{BrushParams, HistoryStatus, LinearRgba, Page};
+use aj_core::{BrushParams, BrushType, HistoryStatus, LinearRgba, Page};
 use aj_engine::{Command, Engine};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -70,6 +70,8 @@ pub enum BrushAction {
     /// emitting this action, so the engine can store it without further
     /// validation.
     SetColor(LinearRgba),
+    /// Switch the brush's type (normal ⇄ pigment).
+    SetBrushType(BrushType),
     DecreaseMaxWidth,
     IncreaseMaxWidth,
     DecreaseMinRatio,
@@ -82,6 +84,7 @@ impl BrushAction {
             Self::SetMaxWidth(v) => Command::SetBrushMaxWidth(v),
             Self::SetMinRatio(r) => Command::SetBrushMinRatio(r),
             Self::SetColor(c) => Command::SetBrushColor(c),
+            Self::SetBrushType(brush_type) => Command::SetBrushType(brush_type),
             Self::DecreaseMaxWidth => {
                 Command::SetBrushMaxWidth(current.max_width * BRUSH_WIDTH_FACTOR_DECR)
             }

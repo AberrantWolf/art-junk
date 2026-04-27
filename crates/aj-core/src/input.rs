@@ -99,11 +99,12 @@ pub struct BrushParams {
     /// so `aj-core` stays free of render-pipeline deps; the renderer converts
     /// once at the draw site via `to_srgb8`.
     pub color: LinearRgba,
-    /// How overlapping paint from this brush combines with what's already on
-    /// the canvas. `#[serde(default)]` so documents written before this field
-    /// existed deserialize as `MixingMode::Additive`.
+    /// Which brush program runs for this stroke — selects the per-pixel math
+    /// the renderer dispatches when depositing into the substrate.
+    /// `#[serde(default)]` so documents written before this field existed
+    /// deserialize as `BrushType::Normal`.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub mixing_mode: MixingMode,
+    pub brush_type: BrushType,
 }
 
 impl Default for BrushParams {
@@ -113,31 +114,36 @@ impl Default for BrushParams {
             max_width: 4.0,
             curve: PressureCurve::Linear,
             color: LinearRgba::from_srgb8([0, 200, 220, 255]),
-            mixing_mode: MixingMode::Additive,
+            brush_type: BrushType::Normal,
         }
     }
 }
 
-/// How a brush's paint combines with the canvas underneath it. `#[non_exhaustive]`
-/// keeps `match` arms forward-compatible at compile time; the `#[serde(other)]`
-/// `Unknown` variant keeps deserialization forward-compatible at the wire — a
-/// document saved by a future build with an unrecognized variant loads as
-/// `Unknown` rather than hard-failing, so a phase-G tier-3 mode does not need
-/// a `doc_version` bump.
+/// What kind of brush program runs when this stroke is rendered. The renderer
+/// dispatches a per-pixel fragment program against the linear-RGB substrate
+/// keyed off this enum. `#[non_exhaustive]` keeps `match` arms forward-
+/// compatible at compile time; the `#[serde(other)]` `Unknown` variant keeps
+/// deserialization forward-compatible at the wire — a document saved by a
+/// future build with an unrecognized variant loads as `Unknown` rather than
+/// hard-failing, so adding a new brush type later does not need a
+/// `doc_version` bump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[non_exhaustive]
-pub enum MixingMode {
-    /// Linear-sRGB alpha-composite — what GPUs do natively. Fast, correct for
-    /// light; wrong for paint (yellow + blue = gray rather than green).
+pub enum BrushType {
+    /// Standard alpha-over against the substrate in linear RGB — opaque or
+    /// semi-opaque ink that covers what's beneath. The default for most pens,
+    /// markers, and inks. Fast, correct for light; wrong for paint (yellow +
+    /// blue = gray rather than green).
     #[default]
-    Additive,
+    Normal,
     /// Kubelka–Munk pigment-style mixing via [`crate::Pigment`]. Paint-like:
-    /// blends in K/S space rather than linear RGB.
+    /// blends in K/S space against the current substrate color, then writes
+    /// the integrated linear RGB back to the substrate.
     Pigment,
     /// Forward-compat fallback: deserialized when an older binary loads a
-    /// document written with a newer variant. Behaves as `Additive` in the
+    /// document written with a newer variant. Behaves as `Normal` in the
     /// renderer (safe default) until upgraded; never serialized in this form.
     #[cfg_attr(feature = "serde", serde(other))]
     Unknown,
@@ -172,7 +178,7 @@ mod tests {
         assert!(b.min_width < b.max_width);
         assert_eq!(b.curve, PressureCurve::Linear);
         assert_eq!(b.color.to_srgb8(), [0, 200, 220, 255]);
-        assert_eq!(b.mixing_mode, MixingMode::Additive);
+        assert_eq!(b.brush_type, BrushType::Normal);
     }
 
     #[test]

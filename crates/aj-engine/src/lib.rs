@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use aj_core::{
-    AppSnapshot, BrushParams, DocumentState, Edit, HistoryStatus, LinearRgba, Sample,
+    AppSnapshot, BrushParams, BrushType, DocumentState, Edit, HistoryStatus, LinearRgba, Sample,
     SampleRevision, Size, Stroke, StrokeId, ToolCaps,
 };
 use arc_swap::ArcSwap;
@@ -65,6 +65,9 @@ pub enum Command {
     /// Sets the brush color. Expected to be already gamut-mapped to sRGB by
     /// the picker — the engine is not the place to decide how to land a color.
     SetBrushColor(LinearRgba),
+    /// Sets the brush's type (normal, pigment, …). Affects future strokes
+    /// only; in-flight strokes carry the type frozen at `BeginStroke` time.
+    SetBrushType(BrushType),
     Undo,
     Redo,
     Shutdown,
@@ -174,6 +177,9 @@ pub fn apply(cmd: Command, state: &mut EngineState) -> ApplyOutcome {
         }
         Command::SetBrushColor(c) => {
             state.doc.set_brush_color(c);
+        }
+        Command::SetBrushType(brush_type) => {
+            state.doc.set_brush_type(brush_type);
         }
         Command::Undo => {
             if state.doc.has_active_stroke() {
