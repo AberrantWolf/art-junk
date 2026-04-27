@@ -532,11 +532,19 @@ impl StrokeCompositor {
     /// target layer is force-included even if `visible = false`, so an
     /// in-flight stroke stays visible when the user toggles its layer's
     /// visibility off.
+    ///
+    /// **Per-layer submit**: every layer gets its own command encoder and
+    /// `queue.submit`. We can't batch all layers' blend passes into one
+    /// encoder/submit because each pass reads `blend_uniform_buf` and the
+    /// per-layer `queue.write_buffer` calls all flush at submit time —
+    /// batching would make every pass see the *last* opacity write (the
+    /// top layer's) instead of its own. Per-layer submit costs N submits
+    /// per frame, which matches the per-stroke submit pattern in
+    /// `apply_stroke` and is fine at our scale.
     pub fn composite_layers<'a, I>(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
         layers: I,
         active_stroke_layer: Option<LayerId>,
     ) where
@@ -584,6 +592,9 @@ impl StrokeCompositor {
                 ],
             });
 
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("aj-render blend-cmd"),
+            });
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("aj-render blend pass"),
@@ -603,6 +614,7 @@ impl StrokeCompositor {
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.draw(0..3, 0..1);
             }
+            queue.submit(Some(encoder.finish()));
 
             self.composite_front_idx = write;
         }

@@ -120,18 +120,15 @@ impl Renderer {
 
         // 3. Inter-layer composite: blend visible layers (and the active
         //    stroke's layer regardless of visibility) into the accumulator
-        //    using each layer's BlendMode + opacity.
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("aj-render composite-cmd"),
-        });
+        //    using each layer's BlendMode + opacity. `composite_layers`
+        //    submits per-layer internally — see its doc-comment for why
+        //    we can't batch.
         compositor.composite_layers(
             device,
             queue,
-            &mut encoder,
             snapshot.layers.iter(),
             snapshot.active_stroke_layer,
         );
-        queue.submit(Some(encoder.finish()));
 
         // 4. Page chrome (border etc.) renders to a separate buffer that
         //    present composites on top of the canvas accumulator.
