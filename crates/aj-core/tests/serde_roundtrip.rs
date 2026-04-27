@@ -263,8 +263,10 @@ fn brush_type_roundtrips() {
 
 #[test]
 fn blend_mode_roundtrips() {
-    let got: BlendMode = cbor_roundtrip(&BlendMode::Normal);
-    assert_eq!(got, BlendMode::Normal);
+    for mode in [BlendMode::Normal, BlendMode::OklabMix] {
+        let got: BlendMode = cbor_roundtrip(&mode);
+        assert_eq!(got, mode);
+    }
 }
 
 /// Forward-compat fence: a CBOR blob written by a hypothetical future build

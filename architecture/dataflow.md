@@ -192,7 +192,9 @@ sequenceDiagram
     `parity.rs` enforce no drift. Adding a brush program is one WGSL file
     plus one pipeline registration.
   - One blend program per `BlendMode`: **Normal** (linear-RGB alpha-over
-    with per-layer opacity) ships in C2; **OklabMix** lands in C4. Lookup
+    with per-layer opacity) and **OklabMix** (perceptually-uniform lerp
+    via Oklab — Björn Ottosson 2020 — same Porter-Duff alpha math as
+    Normal, just with the RGB lerp moved into Oklab space). Lookup
     falls back to `Normal` for `BlendMode::Unknown` — the same forward-
     compat fallback pattern as `BrushType`. Adding a blend mode is one
     WGSL file plus one `HashMap::insert` in `new()`.

@@ -31,8 +31,25 @@ use super::LayerAction;
 fn blend_mode_label(mode: BlendMode) -> &'static str {
     match mode {
         BlendMode::Normal => "Normal",
+        BlendMode::OklabMix => "Oklab Mix",
         BlendMode::Unknown => "Unknown (fallback)",
         _ => "Unknown",
+    }
+}
+
+/// Tooltip for each blend mode — explains the math in user terms.
+fn blend_mode_tooltip(mode: BlendMode) -> &'static str {
+    match mode {
+        BlendMode::Normal => {
+            "Standard alpha-over: layer on top of below in linear RGB. The default."
+        }
+        BlendMode::OklabMix => {
+            "Lerp in Oklab — perceptually-uniform colour midpoints. Two saturated layers blend to a midpoint that 'looks right' instead of the muddy linear-RGB lerp."
+        }
+        BlendMode::Unknown => {
+            "Forward-compat fallback. This document was written by a newer build that introduced a blend mode this binary doesn't recognise; it renders as Normal."
+        }
+        _ => "",
     }
 }
 
@@ -145,20 +162,18 @@ fn draw_layer_row(
             });
         }
 
-        // Blend mode dropdown — C3 ships only `Normal`; `OklabMix` lands
-        // in C4. `Unknown` is filtered from the user-selectable list (it
-        // only ever appears as the *current* selection on a loaded doc
-        // written by a future build).
+        // Blend mode dropdown. `Unknown` is filtered from the user-
+        // selectable list (it only ever appears as the *current* selection
+        // on a loaded doc written by a future build).
         ui.horizontal(|ui| {
             ui.label("Blend");
             egui::ComboBox::from_id_salt(("aj_layer_blend", layer.id.raw()))
                 .selected_text(blend_mode_label(layer.blend_mode))
                 .show_ui(ui, |ui| {
-                    // Iterate so adding `OklabMix` in C4 is a one-line edit.
-                    #[allow(clippy::single_element_loop)]
-                    for mode in [BlendMode::Normal] {
-                        let resp =
-                            ui.selectable_label(layer.blend_mode == mode, blend_mode_label(mode));
+                    for mode in [BlendMode::Normal, BlendMode::OklabMix] {
+                        let resp = ui
+                            .selectable_label(layer.blend_mode == mode, blend_mode_label(mode))
+                            .on_hover_text(blend_mode_tooltip(mode));
                         if resp.clicked() && layer.blend_mode != mode {
                             pending.push(LayerAction::SetLayerBlendMode { id: layer.id, mode });
                         }

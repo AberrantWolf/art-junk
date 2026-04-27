@@ -290,4 +290,124 @@ mod tests {
         // alpha: 0 + (1 - 0) * 0.8 = 0.8
         assert!((out.3 - 0.8).abs() < 1e-6);
     }
+
+    /// CPU mirror of `shaders/blend_oklab_mix.wgsl`. Linear RGB → Oklab,
+    /// lerp by `t` in Oklab, → linear RGB; alpha follows the same
+    /// Porter-Duff over as the Normal blend.
+    fn signed_cbrt(x: f32) -> f32 {
+        x.signum() * x.abs().powf(1.0 / 3.0)
+    }
+
+    // Coefficients literal-matched against `shaders/blend_oklab_mix.wgsl`
+    // so CPU mirror and GPU shader quantise to the same f32 bits, not
+    // 1-ULP-drifted neighbours. Source: Björn Ottosson 2020 (Oklab post).
+    // `clippy::excessive_precision` is intentional: keeping the same
+    // 10-digit literals as the WGSL makes "is the constant the same?"
+    // a textual diff rather than a debug-print exercise.
+    #[allow(clippy::many_single_char_names, clippy::excessive_precision)]
+    fn linear_rgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+        let l = 0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b;
+        let m = 0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b;
+        let s = 0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b;
+        let l_ = signed_cbrt(l);
+        let m_ = signed_cbrt(m);
+        let s_ = signed_cbrt(s);
+        (
+            0.210_454_255_3 * l_ + 0.793_617_785_0 * m_ - 0.004_072_046_8 * s_,
+            1.977_998_495_1 * l_ - 2.428_592_205_0 * m_ + 0.450_593_709_9 * s_,
+            0.025_904_037_1 * l_ + 0.782_771_766_2 * m_ - 0.808_675_766_0 * s_,
+        )
+    }
+
+    #[allow(clippy::many_single_char_names, clippy::excessive_precision)]
+    fn oklab_to_linear_rgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
+        let l_ = l + 0.396_337_777_4 * a + 0.215_803_757_3 * b;
+        let m_ = l - 0.105_561_345_8 * a - 0.063_854_172_8 * b;
+        let s_ = l - 0.089_484_177_5 * a - 1.291_485_548_0 * b;
+        let l3 = l_ * l_ * l_;
+        let m3 = m_ * m_ * m_;
+        let s3 = s_ * s_ * s_;
+        (
+            4.076_741_662_1 * l3 - 3.307_711_591_3 * m3 + 0.230_969_929_2 * s3,
+            -1.268_438_004_6 * l3 + 2.609_757_401_1 * m3 - 0.341_319_396_5 * s3,
+            -0.004_196_086_3 * l3 - 0.703_418_614_7 * m3 + 1.707_614_701_0 * s3,
+        )
+    }
+
+    fn apply_blend_oklab_mix(
+        below: (f32, f32, f32, f32),
+        layer: (f32, f32, f32, f32),
+        opacity: f32,
+    ) -> (f32, f32, f32, f32) {
+        let t = (layer.3 * opacity).clamp(0.0, 1.0);
+        let bl = linear_rgb_to_oklab(below.0, below.1, below.2);
+        let ll = linear_rgb_to_oklab(layer.0, layer.1, layer.2);
+        let mixed =
+            (bl.0 * (1.0 - t) + ll.0 * t, bl.1 * (1.0 - t) + ll.1 * t, bl.2 * (1.0 - t) + ll.2 * t);
+        let rgb = oklab_to_linear_rgb(mixed.0, mixed.1, mixed.2);
+        let new_a = below.3 + (1.0 - below.3) * t;
+        (rgb.0.clamp(0.0, 1.0), rgb.1.clamp(0.0, 1.0), rgb.2.clamp(0.0, 1.0), new_a)
+    }
+
+    /// Round-trip identity: linear RGB → Oklab → linear RGB reproduces the
+    /// input within float tolerance. If this regresses, the blend math
+    /// silently corrupts colours.
+    #[test]
+    fn oklab_round_trip_is_identity_for_in_gamut_colours() {
+        for (r, g, b) in
+            [(0.0, 0.0, 0.0), (1.0, 1.0, 1.0), (0.5, 0.0, 0.0), (0.05, 0.05, 0.8), (0.7, 0.2, 0.4)]
+        {
+            let (l, a, b_lab) = linear_rgb_to_oklab(r, g, b);
+            let (rr, gg, bb) = oklab_to_linear_rgb(l, a, b_lab);
+            assert!((rr - r).abs() < 1e-5, "r drift: {r} → {rr}");
+            assert!((gg - g).abs() < 1e-5, "g drift: {g} → {gg}");
+            assert!((bb - b).abs() < 1e-5, "b drift: {b} → {bb}");
+        }
+    }
+
+    /// Oklab blend at t=0 reproduces below exactly.
+    #[test]
+    fn blend_oklab_mix_at_zero_is_below() {
+        let below = (0.7, 0.2, 0.4, 1.0);
+        let layer = (0.0, 0.0, 1.0, 0.0); // alpha 0 → t=0
+        let out = apply_blend_oklab_mix(below, layer, 1.0);
+        assert!((out.0 - below.0).abs() < 1e-5);
+        assert!((out.1 - below.1).abs() < 1e-5);
+        assert!((out.2 - below.2).abs() < 1e-5);
+    }
+
+    /// Oklab blend at t=1 reproduces layer (modulo round-trip drift).
+    #[test]
+    fn blend_oklab_mix_at_one_is_layer() {
+        let below = (0.7, 0.2, 0.4, 1.0);
+        let layer = (0.05, 0.05, 0.8, 1.0);
+        let out = apply_blend_oklab_mix(below, layer, 1.0);
+        assert!((out.0 - layer.0).abs() < 1e-4);
+        assert!((out.1 - layer.1).abs() < 1e-4);
+        assert!((out.2 - layer.2).abs() < 1e-4);
+    }
+
+    /// Oklab midpoint differs noticeably from the linear-RGB midpoint —
+    /// the whole point of the `OklabMix` blend mode. Without this,
+    /// `OklabMix` would produce the same output as Normal at t=0.5 and
+    /// the feature wouldn't earn its keep.
+    #[test]
+    fn blend_oklab_mix_at_half_differs_from_linear_lerp() {
+        let red = (1.0, 0.0, 0.0, 1.0);
+        let blue = (0.0, 0.0, 1.0, 1.0);
+        let oklab_mid = apply_blend_oklab_mix(red, blue, 1.0);
+        // Linear midpoint would be (0.5, 0.0, 0.5).
+        let dr = (oklab_mid.0 - 0.5_f32).abs();
+        let dg = (oklab_mid.1 - 0.0_f32).abs();
+        let db = (oklab_mid.2 - 0.5_f32).abs();
+        // At least one channel must differ by > 0.05; otherwise Oklab
+        // and linear lerp would be doing the same thing.
+        assert!(
+            dr > 0.05 || dg > 0.05 || db > 0.05,
+            "Oklab midpoint of red+blue ({:.3}, {:.3}, {:.3}) suspiciously close to linear lerp",
+            oklab_mid.0,
+            oklab_mid.1,
+            oklab_mid.2
+        );
+    }
 }

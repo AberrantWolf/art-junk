@@ -209,6 +209,10 @@ impl StrokeCompositor {
             label: Some("aj-render blend-normal shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blend_normal.wgsl").into()),
         });
+        let blend_oklab_mix_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("aj-render blend-oklab-mix shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blend_oklab_mix.wgsl").into()),
+        });
 
         let brush_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -247,9 +251,16 @@ impl StrokeCompositor {
             &blend_pipeline_layout,
             &blend_normal_shader,
         );
+        let blend_oklab_mix_pipeline = make_substrate_pipeline(
+            device,
+            "aj-render blend-oklab-mix pipeline",
+            &blend_pipeline_layout,
+            &blend_oklab_mix_shader,
+        );
 
         let mut blend_pipelines: HashMap<BlendMode, wgpu::RenderPipeline> = HashMap::new();
         blend_pipelines.insert(BlendMode::Normal, blend_normal_pipeline);
+        blend_pipelines.insert(BlendMode::OklabMix, blend_oklab_mix_pipeline);
         // BlendMode::Unknown intentionally absent from the map; lookup
         // failures fall back to Normal at composite time, mirroring the
         // BrushType::Unknown → plain fallback.

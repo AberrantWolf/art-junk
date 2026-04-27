@@ -64,6 +64,12 @@ pub enum BlendMode {
     /// shows through where this layer's alpha < 1.
     #[default]
     Normal,
+    /// Lerp in Oklab (Björn Ottosson 2020) — perceptually-uniform colour
+    /// mid-points. Two saturated layers blend to a colour that "looks
+    /// like" the midpoint instead of the muddy linear-RGB lerp. Same
+    /// Porter-Duff alpha math as `Normal`; only the RGB interpolation
+    /// space differs.
+    OklabMix,
     /// Forward-compat fallback: deserialised when an older binary loads a
     /// document written with a newer variant. Behaves as `Normal` in the
     /// renderer until upgraded; never serialised in this form.
