@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use aj_core::{
-    BrushParams, Point, PointerId, Sample, SampleClass, SampleRevision, StrokeId, ToolCaps,
+    BrushParams, LayerId, Point, PointerId, Sample, SampleClass, SampleRevision, StrokeId, ToolCaps,
 };
 use aj_engine::{Command, EngineState, apply};
 
@@ -157,6 +157,78 @@ fn revise_sample_before_commit_is_folded_into_history_snapshot() {
     let stroke = &snap.scene.strokes[0];
     assert!((stroke.samples[0].pressure - 0.8).abs() < f32::EPSILON);
     assert_eq!(stroke.samples[0].class, SampleClass::Committed);
+}
+
+#[test]
+fn add_layer_command_pushes_history_and_appends_layer() {
+    let mut state = EngineState::new();
+    let initial_layers = state.doc.layers().len();
+    apply(Command::AddLayer { name: "Layer 2".into() }, &mut state);
+    let snap = state.snapshot();
+    assert_eq!(snap.scene.layers.len(), initial_layers + 1);
+    assert_eq!(snap.scene.layers.last().unwrap().name, "Layer 2");
+    assert!(snap.history.can_undo);
+}
+
+#[test]
+fn remove_layer_command_is_refused_during_active_stroke() {
+    // The renderer + engine assume the active stroke's target layer still
+    // exists at EndStroke time. Mid-drag RemoveLayer would violate that;
+    // engine refuses (no-op + warn).
+    let mut state = EngineState::new();
+    apply(Command::AddLayer { name: "Layer 2".into() }, &mut state);
+    let l2 = state.doc.layers().last().unwrap().id;
+    apply(Command::SetActiveLayer { id: l2 }, &mut state);
+
+    // Start a stroke into l2.
+    apply(
+        Command::BeginStroke {
+            id: StrokeId(1),
+            sample: sample_at(0.0, 0.0),
+            caps: ToolCaps::empty(),
+            brush: BrushParams::default(),
+        },
+        &mut state,
+    );
+    assert!(state.doc.has_active_stroke());
+
+    let layers_before = state.doc.layers().len();
+    apply(Command::RemoveLayer { id: l2 }, &mut state);
+    assert_eq!(
+        state.doc.layers().len(),
+        layers_before,
+        "RemoveLayer must be a no-op while a stroke is in flight"
+    );
+}
+
+#[test]
+fn begin_stroke_after_layer_switch_commits_into_new_layer() {
+    let mut state = EngineState::new();
+    let l1 = state.doc.active_layer();
+    apply(Command::AddLayer { name: "Layer 2".into() }, &mut state);
+    let l2 = state.doc.layers().last().unwrap().id;
+    apply(Command::SetActiveLayer { id: l2 }, &mut state);
+
+    draw_one(&mut state, StrokeId(1));
+
+    // Stroke landed in l2, not l1.
+    let l1_layer = state.doc.layers().iter().find(|l| l.id == l1).unwrap();
+    let l2_layer = state.doc.layers().iter().find(|l| l.id == l2).unwrap();
+    assert_eq!(l1_layer.strokes.len(), 0);
+    assert_eq!(l2_layer.strokes.len(), 1);
+}
+
+#[test]
+fn set_active_layer_with_unknown_id_is_rejected() {
+    let mut state = EngineState::new();
+    let bogus = LayerId::next();
+    let active_before = state.doc.active_layer();
+    apply(Command::SetActiveLayer { id: bogus }, &mut state);
+    assert_eq!(
+        state.doc.active_layer(),
+        active_before,
+        "active_layer must not change for an unknown id"
+    );
 }
 
 #[test]

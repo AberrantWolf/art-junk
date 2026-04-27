@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use aj_core::{
-    AppSnapshot, BrushParams, BrushType, DocumentState, Edit, HistoryStatus, LinearRgba, Sample,
-    SampleRevision, Size, Stroke, StrokeId, ToolCaps,
+    AppSnapshot, BlendMode, BrushParams, BrushType, DocumentState, Edit, HistoryStatus, LayerId,
+    LinearRgba, Sample, SampleRevision, Size, Stroke, StrokeId, ToolCaps,
 };
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -68,6 +68,47 @@ pub enum Command {
     /// Sets the brush's type (normal, pigment, …). Affects future strokes
     /// only; in-flight strokes carry the type frozen at `BeginStroke` time.
     SetBrushType(BrushType),
+    /// Append a new empty layer named `name`. Undoable.
+    AddLayer {
+        name: String,
+    },
+    /// Remove the named layer. Refused (no-op + warn) while a stroke is in
+    /// flight, mirroring the Undo / Redo guard at the bottom of `apply`. The
+    /// removed layer's data — strokes, name, visibility — is captured in the
+    /// inverse `AddLayer` so undo restores the layer exactly. If the removed
+    /// layer was active, the inverse remembers that and re-selects it on undo.
+    RemoveLayer {
+        id: LayerId,
+    },
+    /// Reorder a layer to `new_index` (clamped to current bounds). Undoable.
+    MoveLayer {
+        id: LayerId,
+        new_index: usize,
+    },
+    /// Switch the active layer — where the next `BeginStroke` will commit.
+    /// Pure view-state: never recorded in history.
+    SetActiveLayer {
+        id: LayerId,
+    },
+    // TODO(undoable-layer-edits): the per-layer property setters below match
+    // today's non-undoable pattern (SetPageSize, etc.). Real apps put layer
+    // property changes on the undo stack; revisit alongside undoable-page-edits.
+    SetLayerName {
+        id: LayerId,
+        name: String,
+    },
+    SetLayerVisible {
+        id: LayerId,
+        visible: bool,
+    },
+    SetLayerOpacity {
+        id: LayerId,
+        opacity: f32,
+    },
+    SetLayerBlendMode {
+        id: LayerId,
+        mode: BlendMode,
+    },
     Undo,
     Redo,
     Shutdown,
@@ -130,6 +171,7 @@ pub enum ApplyOutcome {
 
 /// Apply one command against engine state. Pure with respect to wall-clock/time/IO,
 /// so tests drive it directly.
+#[allow(clippy::too_many_lines)] // one match arm per Command variant; splitting hurts the per-command flow.
 pub fn apply(cmd: Command, state: &mut EngineState) -> ApplyOutcome {
     match cmd {
         Command::BeginStroke { id, sample, caps, brush } => {
@@ -142,11 +184,13 @@ pub fn apply(cmd: Command, state: &mut EngineState) -> ApplyOutcome {
             state.doc.revise_sample(stroke_id, update_index, revision);
         }
         Command::EndStroke { id } => {
-            if let Some(stroke) = state.doc.end_stroke(id) {
-                // Commit: apply AddStroke as a forward edit and record its inverse.
-                let inverse = Edit::AddStroke(stroke)
+            if let Some((stroke, layer)) = state.doc.end_stroke(id) {
+                // Commit: apply AddStroke as a forward edit (targeting the
+                // layer that was active at BeginStroke time) and record its
+                // inverse on the history stack.
+                let inverse = Edit::AddStroke { stroke, layer }
                     .apply(&mut state.doc)
-                    .expect("AddStroke into empty slot is infallible");
+                    .expect("AddStroke into existing layer is infallible");
                 state.history.record(inverse);
             }
         }
@@ -180,6 +224,53 @@ pub fn apply(cmd: Command, state: &mut EngineState) -> ApplyOutcome {
         }
         Command::SetBrushType(brush_type) => {
             state.doc.set_brush_type(brush_type);
+        }
+        Command::AddLayer { name } => {
+            // AddLayer is naturally expressed as an Edit so undo/redo
+            // captures the layer payload identically to other reversible
+            // ops. We mint the layer ourselves so the engine controls the
+            // id allocation.
+            let layer = aj_core::Layer::new(name);
+            let index = state.doc.layers().len();
+            let edit = Edit::AddLayer { layer, index, was_active: false };
+            match edit.apply(&mut state.doc) {
+                Ok(inverse) => state.history.record(inverse),
+                Err(err) => log::warn!("AddLayer failed: {err}"),
+            }
+        }
+        Command::RemoveLayer { id } => {
+            // Refuse mid-drag — same reasoning as the Undo/Redo guard. If
+            // we removed the layer the active stroke targets, EndStroke
+            // would commit into a non-existent layer.
+            if state.doc.has_active_stroke() {
+                log::warn!("RemoveLayer ignored while a stroke is in flight");
+                return ApplyOutcome::Continue;
+            }
+            match (Edit::RemoveLayer { id }).apply(&mut state.doc) {
+                Ok(inverse) => state.history.record(inverse),
+                Err(err) => log::warn!("RemoveLayer failed: {err}"),
+            }
+        }
+        Command::MoveLayer { id, new_index } => {
+            match (Edit::MoveLayer { id, new_index }).apply(&mut state.doc) {
+                Ok(inverse) => state.history.record(inverse),
+                Err(err) => log::warn!("MoveLayer failed: {err}"),
+            }
+        }
+        Command::SetActiveLayer { id } => {
+            state.doc.set_active_layer(id);
+        }
+        Command::SetLayerName { id, name } => {
+            state.doc.set_layer_name(id, name);
+        }
+        Command::SetLayerVisible { id, visible } => {
+            state.doc.set_layer_visible(id, visible);
+        }
+        Command::SetLayerOpacity { id, opacity } => {
+            state.doc.set_layer_opacity(id, opacity);
+        }
+        Command::SetLayerBlendMode { id, mode } => {
+            state.doc.set_layer_blend_mode(id, mode);
         }
         Command::Undo => {
             if state.doc.has_active_stroke() {

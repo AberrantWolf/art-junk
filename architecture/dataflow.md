@@ -127,13 +127,18 @@ sequenceDiagram
   with a `HistoryStatus { can_undo, can_redo }` so UI can enable/disable menu entries
   without reaching into engine internals. Renderer ignores `history`; UI reads
   `scene.page` for toggle checkmarks but ignores `scene.strokes`.
-- `SceneSnapshot` is `{ page: Page, strokes: Vec<Stroke> }`. A `Stroke` is
-  `{ id, samples: Vec<Sample>, caps: ToolCaps, brush: BrushParams }`; the
-  renderer currently reads only `sample.position`, but `pressure` / `tilt` /
-  `brush` are carried end-to-end so variable-width rendering (a later
-  milestone) doesn't need a data-shape change. Page state rides the same
-  single ArcSwap publication as strokes so the renderer reads both from a
-  consistent view — no parallel channel for page mutations.
+- `SceneSnapshot` is `{ page, brush, strokes, layers, active_layer }`. A
+  `Stroke` is `{ id, samples: Vec<Sample>, caps: ToolCaps, brush: BrushParams }`,
+  and a `Layer` is `{ id, name, strokes, blend_mode, opacity, visible }`. The
+  document is structured as `Vec<Layer>`; `strokes` on the snapshot is a
+  flattened view of visible-layer strokes plus the active mid-drag stroke,
+  populated for the C1 renderer that still treats the canvas as one
+  substrate. C2 deletes the flat field once the renderer iterates layers
+  directly. The renderer currently reads only `sample.position`, but
+  `pressure` / `tilt` / `brush` are carried end-to-end so variable-width
+  rendering (a later milestone) doesn't need a data-shape change. Page state
+  rides the same single ArcSwap publication as strokes so the renderer reads
+  both from a consistent view — no parallel channel for page mutations.
 - Page mutations (`SetPageSize` / `SetShowBounds` / `SetClipToBounds`) are Commands
   but not `Edit`s: they bypass the history stack (non-undoable in v1, TODO noted).
 - `Viewport` (pan / zoom state) lives entirely in `aj-app`. View state is not part
